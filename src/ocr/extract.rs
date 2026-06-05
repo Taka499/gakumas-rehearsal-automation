@@ -12,6 +12,27 @@ use crate::log;
 const SCORE_PATTERN: &str =
     r"^((\d+[,.])*\d+|[\-\u{2014}\u{2013}\u{2015}\u{2500}\u{30FC}\u{4E00}]+)$";
 
+/// Pattern to extract individual score tokens from a whole line of OCR text.
+///
+/// Unlike `SCORE_PATTERN` (which validates one already-split word), this is used
+/// with `find_iter` to re-tokenize the raw line text, recovering correct number
+/// boundaries even when Tesseract glues adjacent numbers into a single token.
+///
+/// That gluing happens reliably when a per-character score reaches 7 digits
+/// (>= 1,000,000): the wider number leaves almost no gap to its left neighbor,
+/// so Tesseract's layout analysis emits one token, e.g. "576,8801,193,622" for
+/// "576,880" + "1,193,622". The old per-word path then matched that 13-digit
+/// blob, stripped the separators, and overflowed `u32` in `parse_score` —
+/// failing the entire stage. The structural `\d{1,3}(,\d{3})*` grouping splits
+/// the blob back apart at the thousands marks: after "576,880" the next char
+/// "1" cannot extend the group (no separator), so a new token begins.
+///
+/// This assumes scores are rendered with thousand separators, which the game
+/// always does. A genuinely comma-less number (not observed in practice) would
+/// be over-split into 3-digit chunks.
+const SCORE_TOKEN_PATTERN: &str =
+    r"\d{1,3}(?:[,.]\d{3})*|[\-\u{2014}\u{2013}\u{2015}\u{2500}\u{30FC}\u{4E00}]+";
+
 /// Minimum confidence threshold for accepting OCR lines
 const MIN_CONFIDENCE: f32 = 60.0;
 
@@ -45,48 +66,30 @@ fn is_dash_like(text: &str) -> bool {
     })
 }
 
-/// Strips leading non-score characters that Tesseract sometimes prepends.
-///
-/// OCR occasionally prepends `"`, `$`, or Unicode garbage to the leftmost
-/// word due to horizontal line artifacts in the threshold image.
-/// This strips everything before the first digit or dash character.
-fn sanitize_ocr_word(text: &str) -> &str {
-    let start = text.find(|c: char| c.is_ascii_digit() || is_dash_char(c));
-    match start {
-        Some(0) => text,
-        Some(pos) => &text[pos..],
-        None => text, // No digits found, return as-is (will fail regex anyway)
-    }
-}
-
 /// Extracts per-character scores from a single cropped stage region.
 ///
-/// Collects all words matching SCORE_PATTERN from the OCR output, filters out
-/// noise (scores < 100), and maps them left-to-right. Since blank characters (ー)
-/// are always on the right side, missing slots are padded with 0 on the right.
+/// Re-tokenizes each OCR line's raw text with `SCORE_TOKEN_PATTERN` (rather than
+/// trusting Tesseract's word boundaries), filters out noise (scores < 100), and
+/// maps the tokens left-to-right. Scanning the line text recovers correct number
+/// boundaries when Tesseract glues a >= 1,000,000 score to its neighbor (see
+/// `SCORE_TOKEN_PATTERN`) and naturally skips any leading garbage Tesseract
+/// prepends (e.g. a stray `"` or `$`), since such characters simply fall outside
+/// the pattern. Since blank characters (ー) are always on the right side, missing
+/// slots are padded with 0 on the right.
 ///
 /// Returns an error if no scores are found (each stage has at least 1 character).
 pub fn extract_single_stage(lines: &[OcrLine]) -> Result<[u32; 3]> {
-    let score_regex = Regex::new(SCORE_PATTERN)?;
+    let token_regex = Regex::new(SCORE_TOKEN_PATTERN)?;
 
     let mut scores: Vec<u32> = Vec::new();
 
     for line in lines {
-        for word in &line.words {
-            let sanitized = sanitize_ocr_word(&word.text);
-            if sanitized != word.text {
-                log(&format!(
-                    "Sanitized OCR word: '{}' → '{}'",
-                    word.text, sanitized
-                ));
-            }
-            if score_regex.is_match(sanitized) {
-                let val = parse_score(sanitized)?;
-                // Filter noise: real per-character scores are thousands+
-                if val >= 100 {
-                    scores.push(val);
-                }
-                // val == 0 means dash → skip (blank character, don't count)
+        for m in token_regex.find_iter(&line.text) {
+            let val = parse_score(m.as_str())?;
+            // Filter noise: real per-character scores are thousands+.
+            // val < 100 (including dashes, which parse to 0) is skipped.
+            if val >= 100 {
+                scores.push(val);
             }
         }
     }
@@ -102,7 +105,7 @@ pub fn extract_single_stage(lines: &[OcrLine]) -> Result<[u32; 3]> {
     }
 
     log(&format!(
-        "Stage scores: {:?} (found {} words)",
+        "Stage scores: {:?} (found {} tokens)",
         result,
         scores.len()
     ));
@@ -339,21 +342,21 @@ mod tests {
 
     #[test]
     fn test_extract_single_stage_three_scores() {
-        let lines = vec![make_line(&["12345", "23456", "34567"], 90.0)];
+        let lines = vec![make_line(&["12,345", "23,456", "34,567"], 90.0)];
         let result = extract_single_stage(&lines).unwrap();
         assert_eq!(result, [12345, 23456, 34567]);
     }
 
     #[test]
     fn test_extract_single_stage_two_scores_one_dash() {
-        let lines = vec![make_line(&["12345", "23456"], 90.0)];
+        let lines = vec![make_line(&["12,345", "23,456"], 90.0)];
         let result = extract_single_stage(&lines).unwrap();
         assert_eq!(result, [12345, 23456, 0]);
     }
 
     #[test]
     fn test_extract_single_stage_one_score_two_dashes() {
-        let lines = vec![make_line(&["12345"], 90.0)];
+        let lines = vec![make_line(&["12,345"], 90.0)];
         let result = extract_single_stage(&lines).unwrap();
         assert_eq!(result, [12345, 0, 0]);
     }
@@ -361,7 +364,7 @@ mod tests {
     #[test]
     fn test_extract_single_stage_noise_filtered() {
         // Small numbers (<100) should be filtered as noise
-        let lines = vec![make_line(&["12345", "50", "23456"], 90.0)];
+        let lines = vec![make_line(&["12,345", "50", "23,456"], 90.0)];
         let result = extract_single_stage(&lines).unwrap();
         assert_eq!(result, [12345, 23456, 0]);
     }
@@ -375,35 +378,35 @@ mod tests {
     #[test]
     fn test_extract_single_stage_dashes_ignored() {
         // Dashes parse to 0, which is < 100, so they're skipped
-        let lines = vec![make_line(&["12345", "ー", "23456"], 90.0)];
+        let lines = vec![make_line(&["12,345", "ー", "23,456"], 90.0)];
         let result = extract_single_stage(&lines).unwrap();
         assert_eq!(result, [12345, 23456, 0]);
     }
 
     #[test]
-    fn test_sanitize_ocr_word() {
-        // Leading quote stripped
-        assert_eq!(sanitize_ocr_word("\"284,467"), "284,467");
-        // Leading dollar stripped
-        assert_eq!(sanitize_ocr_word("$5,051"), "5,051");
-        // No-op for clean word
-        assert_eq!(sanitize_ocr_word("284,467"), "284,467");
-        // Dash preserved
-        assert_eq!(sanitize_ocr_word("ー"), "ー");
-        // Empty string
-        assert_eq!(sanitize_ocr_word(""), "");
-        // All garbage, no digits
-        assert_eq!(sanitize_ocr_word("\"\""), "\"\"");
-        // Multiple leading garbage chars
-        assert_eq!(sanitize_ocr_word("$\"123"), "123");
-    }
-
-    #[test]
     fn test_extract_single_stage_with_garbled_prefix() {
-        // Tesseract prepends " to leftmost word
+        // Tesseract prepends " to the leftmost word; the tokenizer skips it.
         let lines = vec![make_line(&["\"284,467", "70,673", "159,749"], 90.0)];
         let result = extract_single_stage(&lines).unwrap();
         assert_eq!(result, [284467, 70673, 159749]);
+    }
+
+    #[test]
+    fn test_extract_single_stage_merged_million_score() {
+        // Real failed sample 021: a >= 1M score (1,193,622) gets glued to its
+        // left neighbor (576,880), so Tesseract emits "576,8801,193,622".
+        // Previously this overflowed u32 in parse_score and failed the stage.
+        let lines = vec![make_line(&["576,8801,193,622", "213,607"], 90.0)];
+        let result = extract_single_stage(&lines).unwrap();
+        assert_eq!(result, [576880, 1193622, 213607]);
+    }
+
+    #[test]
+    fn test_extract_single_stage_merged_million_middle() {
+        // Real failed sample 304: line text "283,3991,018,192 319,495".
+        let lines = vec![make_line(&["283,3991,018,192", "319,495"], 90.0)];
+        let result = extract_single_stage(&lines).unwrap();
+        assert_eq!(result, [283399, 1018192, 319495]);
     }
 
     #[test]
