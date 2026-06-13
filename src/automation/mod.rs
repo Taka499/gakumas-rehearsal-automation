@@ -13,6 +13,7 @@ pub mod input;
 pub mod ocr_worker;
 pub mod queue;
 pub mod runner;
+pub mod session_meta;
 pub mod state;
 
 pub use config::{get_config, init_config, AutomationConfig, ButtonConfig, RelativeRect};
@@ -23,4 +24,4 @@ pub use detection::{
     ClickRetryInfo,
 };
 pub use input::{click_at_relative, test_postmessage_click, test_sendinput_click};
-pub use runner::{is_automation_running, request_abort, start_automation};
+pub use runner::{is_automation_running, request_abort, resume_automation, start_automation};

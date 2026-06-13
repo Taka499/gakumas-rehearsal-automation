@@ -43,11 +43,11 @@ pub fn render_guide_image(
 }
 
 /// Render the iteration input and control buttons.
-/// Returns (start_clicked, stop_clicked).
+/// Returns (start_clicked, stop_clicked, continue_clicked).
 pub fn render_controls(
     ui: &mut egui::Ui,
     state: &mut GuiState,
-) -> (bool, bool) {
+) -> (bool, bool, bool) {
     let mut start_clicked = false;
     let mut stop_clicked = false;
 
@@ -88,7 +88,22 @@ pub fn render_controls(
         });
     });
 
-    (start_clicked, stop_clicked)
+    // Continue button - shown when the last run was interrupted with runs left.
+    let mut continue_clicked = false;
+    if let Some((completed, total, _)) = state.status.resumable() {
+        let remaining = total.saturating_sub(completed);
+        ui.add_space(8.0);
+        ui.add_enabled_ui(!state.status.is_running(), |ui| {
+            if ui
+                .button(RichText::new(format!("⏵ 続行 (残り {}回)", remaining)).size(16.0))
+                .clicked()
+            {
+                continue_clicked = true;
+            }
+        });
+    }
+
+    (start_clicked, stop_clicked, continue_clicked)
 }
 
 /// Render the progress display section.
@@ -105,8 +120,8 @@ pub fn render_progress(
         AutomationStatus::Idle => Color32::GRAY,
         AutomationStatus::Running { .. } => Color32::from_rgb(0, 120, 200),
         AutomationStatus::Completed { .. } => Color32::from_rgb(0, 150, 0),
-        AutomationStatus::Aborted => Color32::from_rgb(200, 150, 0),
-        AutomationStatus::Error(_) => Color32::from_rgb(200, 0, 0),
+        AutomationStatus::Aborted { .. } => Color32::from_rgb(200, 150, 0),
+        AutomationStatus::Error { .. } => Color32::from_rgb(200, 0, 0),
     };
 
     ui.label(RichText::new(state.status.status_text()).color(status_color));
@@ -140,8 +155,15 @@ pub fn render_progress(
         });
     }
 
-    // Completion summary (if completed)
-    if let AutomationStatus::Completed { session_path, .. } = &state.status {
+    // Completion summary (for any terminal state that produced a session folder).
+    // A timeout/abort run still captured partial data worth showing.
+    let summary_path = match &state.status {
+        AutomationStatus::Completed { session_path, .. } => Some(session_path),
+        AutomationStatus::Aborted { session_path, .. } => session_path.as_ref(),
+        AutomationStatus::Error { session_path, .. } => session_path.as_ref(),
+        _ => None,
+    };
+    if let Some(session_path) = summary_path {
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(4.0);
@@ -207,4 +229,58 @@ pub fn render_actions(
     });
 
     (generate_clicked, open_folder_clicked)
+}
+
+/// Render the "resume a previous session" picker.
+/// Returns (refresh_clicked, resume_clicked).
+pub fn render_resume_picker(ui: &mut egui::Ui, state: &mut GuiState) -> (bool, bool) {
+    let mut refresh_clicked = false;
+    let mut resume_clicked = false;
+    let is_running = state.status.is_running();
+
+    ui.add_space(16.0);
+    ui.heading("中断したセッションを再開");
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new("ゲームをリハーサル開始画面に戻してから再開してください")
+            .small(),
+    );
+    ui.add_space(4.0);
+
+    if ui.button("🔄 更新").clicked() {
+        refresh_clicked = true;
+    }
+
+    if state.resumable_sessions.is_empty() {
+        ui.label(RichText::new("再開可能なセッションはありません").weak());
+        return (refresh_clicked, resume_clicked);
+    }
+
+    let selected_label = state
+        .selected_resume
+        .and_then(|i| state.resumable_sessions.get(i))
+        .map(|s| {
+            let name = s.path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+            format!("{} — {}/{}", name, s.completed, s.total)
+        })
+        .unwrap_or_else(|| "選択してください".to_string());
+
+    egui::ComboBox::from_id_source("resume_session_combo")
+        .selected_text(selected_label)
+        .show_ui(ui, |ui| {
+            for (i, s) in state.resumable_sessions.iter().enumerate() {
+                let name = s.path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                let label = format!("{} — {}/{}", name, s.completed, s.total);
+                ui.selectable_value(&mut state.selected_resume, Some(i), label);
+            }
+        });
+
+    ui.add_space(4.0);
+    ui.add_enabled_ui(!is_running && state.selected_resume.is_some(), |ui| {
+        if ui.button(RichText::new("▶ 選択を再開").size(16.0)).clicked() {
+            resume_clicked = true;
+        }
+    });
+
+    (refresh_clicked, resume_clicked)
 }

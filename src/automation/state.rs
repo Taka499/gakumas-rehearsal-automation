@@ -103,6 +103,10 @@ pub struct AutomationContext {
     pub config: AutomationConfig,
     /// Current iteration number (1-based)
     pub current_iteration: u32,
+    /// Number of iterations whose result was successfully captured (0-based count)
+    pub completed_iterations: u32,
+    /// 1-based iteration this run begins at (1 for fresh, completed+1 for resume)
+    pub start_iteration: u32,
     /// Maximum number of iterations
     pub max_iterations: u32,
     /// Channel sender for OCR work items
@@ -127,6 +131,7 @@ impl AutomationContext {
         hwnd: HWND,
         config: AutomationConfig,
         max_iterations: u32,
+        start_iteration: u32,
         work_sender: Sender<OcrWorkItem>,
         screenshot_dir: PathBuf,
     ) -> Self {
@@ -141,6 +146,8 @@ impl AutomationContext {
             hwnd,
             config,
             current_iteration: 0,
+            completed_iterations: start_iteration.saturating_sub(1),
+            start_iteration,
             max_iterations,
             work_sender,
             start_time: Instant::now(),
@@ -171,7 +178,7 @@ impl AutomationContext {
 
         match &self.state {
             AutomationState::Idle => {
-                self.current_iteration = 1;
+                self.current_iteration = self.start_iteration;
                 crate::log(&format!(
                     "Starting automation: {} iterations",
                     self.max_iterations
@@ -186,8 +193,9 @@ impl AutomationContext {
                     self.current_iteration, self.max_iterations
                 ));
 
-                // Only retry End button click on iteration 2+ (first iteration hasn't clicked End yet)
-                let click_retry = if self.current_iteration > 1 {
+                // Only retry End button click after the first iteration of this run
+                // (the first iteration — fresh or resumed — hasn't clicked End yet)
+                let click_retry = if self.current_iteration > self.start_iteration {
                     self.end_button_ref.as_ref().map(|ref_img| ClickRetryInfo {
                         hwnd: self.hwnd,
                         button_x: self.config.end_button.x,
@@ -369,6 +377,9 @@ impl AutomationContext {
                     crate::log(&format!("Warning: Failed to queue OCR work item: {}", e));
                     // Don't fail automation for this - OCR is secondary
                 }
+
+                // This run produced a result; count it as completed.
+                self.completed_iterations += 1;
 
                 self.state = AutomationState::ClickingEnd;
                 Ok(true)

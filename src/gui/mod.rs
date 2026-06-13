@@ -15,8 +15,10 @@ use tray_icon::{
     TrayIcon, TrayIconBuilder,
 };
 
-use crate::automation::runner::{is_automation_running, start_automation};
-use crate::automation::state::{request_abort, ABORT_REQUESTED};
+use crate::automation::runner::{
+    get_last_outcome, is_automation_running, resume_automation, start_automation, AutomationOutcome,
+};
+use crate::automation::state::request_abort;
 
 use state::{AutomationStatus, GuiState};
 
@@ -61,14 +63,17 @@ impl GuiApp {
         // Set up tray icon
         let (tray_icon, menu_event_receiver) = Self::setup_tray_icon();
 
-        Self {
+        let mut app = Self {
             state: GuiState::default(),
             guide_images: [None, None],
             images_loaded: false,
             tray_icon,
             menu_event_receiver,
             exit_requested: false,
-        }
+        };
+        // Populate the resume picker with interrupted sessions found on disk.
+        app.scan_resumable_sessions();
+        app
     }
 
     /// Set up the system tray icon with menu.
@@ -192,39 +197,21 @@ impl GuiApp {
     /// Update automation status by polling the automation runner.
     fn update_automation_status(&mut self) {
         let is_running = is_automation_running();
-        let is_aborted = ABORT_REQUESTED.load(Ordering::SeqCst);
 
         match &self.state.status {
             AutomationStatus::Running { total, start_time, .. } => {
                 if !is_running {
-                    // Automation finished - get session path from runner
+                    // Automation finished - resolve the real outcome (success vs
+                    // timeout/error vs abort) reported by the runner.
                     let session_path = crate::automation::runner::get_current_session_path()
                         .unwrap_or_else(|| crate::paths::get_output_dir());
                     self.state.latest_session_path = Some(session_path.clone());
 
-                    if is_aborted {
-                        self.state.status = AutomationStatus::Aborted;
-                    } else {
-                        // Auto-generate charts on successful completion
-                        crate::log("GUI: Auto-generating charts...");
-                        match crate::analysis::generate_analysis_for_session(&session_path) {
-                            Ok((chart_paths, json_path)) => {
-                                crate::log(&format!(
-                                    "GUI: Charts generated: {} files, stats: {}",
-                                    chart_paths.len(),
-                                    json_path.display()
-                                ));
-                            }
-                            Err(e) => {
-                                crate::log(&format!("GUI: Failed to generate charts: {}", e));
-                            }
-                        }
-
-                        self.state.status = AutomationStatus::Completed {
-                            total: *total,
-                            session_path,
-                        };
-                    }
+                    self.state.status =
+                        self.finalize_status(get_last_outcome(), *total, session_path);
+                    // The just-finished session should immediately appear in (or
+                    // drop out of) the resume picker.
+                    self.scan_resumable_sessions();
                 } else {
                     // Still running - update progress
                     let current = crate::automation::runner::get_current_iteration();
@@ -238,7 +225,7 @@ impl GuiApp {
                 }
             }
             AutomationStatus::Idle | AutomationStatus::Completed { .. } |
-            AutomationStatus::Aborted | AutomationStatus::Error(_) => {
+            AutomationStatus::Aborted { .. } | AutomationStatus::Error { .. } => {
                 // Check if automation started externally (shouldn't happen with GUI)
                 if is_running && !matches!(self.state.status, AutomationStatus::Running { .. }) {
                     self.state.status = AutomationStatus::Running {
@@ -249,6 +236,68 @@ impl GuiApp {
                     };
                 }
             }
+        }
+    }
+
+    /// Builds the terminal `AutomationStatus` from the runner's outcome and
+    /// generates analysis charts when at least one run produced data.
+    fn finalize_status(
+        &self,
+        outcome: Option<AutomationOutcome>,
+        running_total: u32,
+        session_path: std::path::PathBuf,
+    ) -> AutomationStatus {
+        // Map the outcome to (completed, total, optional error message). If the
+        // outcome is missing (shouldn't happen), fall back to treating it as an
+        // error with no completed runs so we never falsely claim success.
+        let (completed, total, error_msg, aborted) = match outcome {
+            Some(AutomationOutcome::Completed { completed, total }) => {
+                (completed, total, None, false)
+            }
+            Some(AutomationOutcome::Aborted { completed, total }) => {
+                (completed, total, None, true)
+            }
+            Some(AutomationOutcome::Error { completed, total, message }) => {
+                (completed, total, Some(message), false)
+            }
+            None => (0, running_total, Some("不明な理由で停止しました".to_string()), false),
+        };
+
+        // Generate charts whenever there is captured data to analyze, even on a
+        // partial (timeout/abort) run, so the user still gets stats for what ran.
+        if completed > 0 {
+            crate::log("GUI: Auto-generating charts...");
+            match crate::analysis::generate_analysis_for_session(&session_path) {
+                Ok((chart_paths, json_path)) => {
+                    crate::log(&format!(
+                        "GUI: Charts generated: {} files, stats: {}",
+                        chart_paths.len(),
+                        json_path.display()
+                    ));
+                }
+                Err(e) => {
+                    crate::log(&format!("GUI: Failed to generate charts: {}", e));
+                }
+            }
+        }
+
+        match (error_msg, aborted) {
+            (Some(message), _) => AutomationStatus::Error {
+                completed,
+                total,
+                message,
+                session_path: Some(session_path),
+            },
+            (None, true) => AutomationStatus::Aborted {
+                completed,
+                total,
+                session_path: Some(session_path),
+            },
+            (None, false) => AutomationStatus::Completed {
+                completed,
+                total,
+                session_path,
+            },
         }
     }
 
@@ -272,7 +321,12 @@ impl GuiApp {
                 crate::log(&format!("GUI: Started automation with {} iterations", iterations));
             }
             Err(e) => {
-                self.state.status = AutomationStatus::Error(e.to_string());
+                self.state.status = AutomationStatus::Error {
+                    completed: 0,
+                    total: iterations,
+                    message: e.to_string(),
+                    session_path: None,
+                };
                 crate::log(&format!("GUI: Failed to start automation: {}", e));
             }
         }
@@ -282,6 +336,84 @@ impl GuiApp {
     fn handle_stop(&mut self) {
         request_abort();
         crate::log("GUI: Requested automation abort");
+    }
+
+    /// Handle "続行" (continue) button click — resumes the in-memory interrupted run.
+    fn handle_continue(&mut self) {
+        if let Some((completed, total, session_path)) = self.state.status.resumable() {
+            match resume_automation(session_path.clone(), completed, total) {
+                Ok(()) => {
+                    self.state.latest_session_path =
+                        crate::automation::runner::get_current_session_path();
+                    self.state.status = AutomationStatus::Running {
+                        current: completed,
+                        total,
+                        state_description: "再開中...".to_string(),
+                        start_time: std::time::Instant::now(),
+                    };
+                    self.state.automation_start_time = Some(std::time::Instant::now());
+                    crate::log(&format!("GUI: Resuming automation from {}/{}", completed, total));
+                }
+                Err(e) => {
+                    self.state.status = AutomationStatus::Error {
+                        completed,
+                        total,
+                        message: e.to_string(),
+                        session_path: Some(session_path),
+                    };
+                    crate::log(&format!("GUI: Failed to resume automation: {}", e));
+                }
+            }
+        }
+    }
+
+    /// Rescan the output directory for interrupted sessions that can be resumed.
+    fn scan_resumable_sessions(&mut self) {
+        let dir = crate::paths::get_output_dir();
+        self.state.resumable_sessions =
+            crate::automation::session_meta::list_resumable(&dir);
+        // Keep selection valid; default to the newest when none chosen.
+        match self.state.selected_resume {
+            Some(i) if i >= self.state.resumable_sessions.len() => {
+                self.state.selected_resume = None;
+            }
+            _ => {}
+        }
+        if self.state.selected_resume.is_none() && !self.state.resumable_sessions.is_empty() {
+            self.state.selected_resume = Some(0);
+        }
+    }
+
+    /// Resume the session currently selected in the picker (restart survival path).
+    fn handle_resume_selected(&mut self) {
+        let chosen = self
+            .state
+            .selected_resume
+            .and_then(|i| self.state.resumable_sessions.get(i).cloned());
+        if let Some(s) = chosen {
+            match resume_automation(s.path.clone(), s.completed, s.total) {
+                Ok(()) => {
+                    self.state.latest_session_path =
+                        crate::automation::runner::get_current_session_path();
+                    self.state.status = AutomationStatus::Running {
+                        current: s.completed,
+                        total: s.total,
+                        state_description: "再開中...".to_string(),
+                        start_time: std::time::Instant::now(),
+                    };
+                    self.state.automation_start_time = Some(std::time::Instant::now());
+                    crate::log(&format!(
+                        "GUI: Resuming session {} from {}/{}",
+                        s.path.display(), s.completed, s.total
+                    ));
+                }
+                Err(e) => {
+                    crate::log(&format!("GUI: Failed to resume selected session: {}", e));
+                    // Refresh the list in case the folder vanished.
+                    self.scan_resumable_sessions();
+                }
+            }
+        }
     }
 
     /// Handle generate charts button click.
@@ -363,14 +495,18 @@ impl eframe::App for GuiApp {
                     ui.label(egui::RichText::new("③ 回数を設定して開始").strong());
                     ui.add_space(8.0);
 
-                    // Controls section (iteration input, start/stop buttons)
-                    let (start_clicked, stop_clicked) = render::render_controls(ui, &mut self.state);
+                    // Controls section (iteration input, start/stop/continue buttons)
+                    let (start_clicked, stop_clicked, continue_clicked) =
+                        render::render_controls(ui, &mut self.state);
 
                     if start_clicked {
                         self.handle_start();
                     }
                     if stop_clicked {
                         self.handle_stop();
+                    }
+                    if continue_clicked {
+                        self.handle_continue();
                     }
 
                     // Progress section
@@ -384,6 +520,16 @@ impl eframe::App for GuiApp {
                     }
                     if open_folder_clicked {
                         self.handle_open_folder();
+                    }
+
+                    // Resume-a-previous-session picker (restart survival)
+                    let (refresh_clicked, resume_selected_clicked) =
+                        render::render_resume_picker(ui, &mut self.state);
+                    if refresh_clicked {
+                        self.scan_resumable_sessions();
+                    }
+                    if resume_selected_clicked {
+                        self.handle_resume_selected();
                     }
                 });
             });

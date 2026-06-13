@@ -2,6 +2,7 @@
 //!
 //! Tracks user input values and automation status for display.
 
+use crate::automation::session_meta::ResumableSession;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -17,15 +18,25 @@ pub enum AutomationStatus {
         state_description: String,
         start_time: Instant,
     },
-    /// Automation completed successfully
+    /// Automation completed successfully (all requested runs finished)
     Completed {
+        completed: u32,
         total: u32,
         session_path: PathBuf,
     },
-    /// Automation was aborted by user
-    Aborted,
-    /// Automation failed with error
-    Error(String),
+    /// Automation was aborted by the user before finishing all runs
+    Aborted {
+        completed: u32,
+        total: u32,
+        session_path: Option<PathBuf>,
+    },
+    /// Automation stopped early due to a timeout or error
+    Error {
+        completed: u32,
+        total: u32,
+        message: String,
+        session_path: Option<PathBuf>,
+    },
 }
 
 impl Default for AutomationStatus {
@@ -42,26 +53,39 @@ impl AutomationStatus {
             Self::Running { current, total, state_description, .. } => {
                 format!("実行中 ({}/{}) - {}", current, total, state_description)
             }
-            Self::Completed { total, session_path } => {
+            Self::Completed { completed, total, session_path } => {
                 // Extract folder name from path for display
                 let folder_name = session_path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("output");
-                format!("完了 ({}回) → {}", total, folder_name)
+                format!("完了 ({}/{}回) → {}", completed, total, folder_name)
             }
-            Self::Aborted => "中断".to_string(),
-            Self::Error(msg) => format!("エラー: {}", msg),
+            Self::Aborted { completed, total, .. } => {
+                format!("中断 ({}/{}回 完了)", completed, total)
+            }
+            Self::Error { completed, total, message, .. } => {
+                format!("エラー ({}/{}回 完了): {}", completed, total, message)
+            }
         }
     }
 
     /// Get progress as percentage (0.0 to 1.0).
+    ///
+    /// For terminal states the bar reflects how many of the requested runs
+    /// actually completed, so a timeout/abort shows real progress, not 100%.
     pub fn progress(&self) -> f32 {
         match self {
             Self::Running { current, total, .. } if *total > 0 => {
                 *current as f32 / *total as f32
             }
-            Self::Completed { .. } => 1.0,
+            Self::Completed { completed, total, .. }
+            | Self::Aborted { completed, total, .. }
+            | Self::Error { completed, total, .. }
+                if *total > 0 =>
+            {
+                (*completed as f32 / *total as f32).clamp(0.0, 1.0)
+            }
             _ => 0.0,
         }
     }
@@ -84,6 +108,20 @@ impl AutomationStatus {
     pub fn is_running(&self) -> bool {
         matches!(self, Self::Running { .. })
     }
+
+    /// If this terminal state can be resumed (interrupted with runs remaining and
+    /// a known session folder), returns (completed, total, session_path).
+    pub fn resumable(&self) -> Option<(u32, u32, std::path::PathBuf)> {
+        match self {
+            Self::Aborted { completed, total, session_path: Some(p) }
+            | Self::Error { completed, total, session_path: Some(p), .. }
+                if *completed < *total =>
+            {
+                Some((*completed, *total, p.clone()))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// GUI application state.
@@ -97,6 +135,10 @@ pub struct GuiState {
     pub latest_session_path: Option<PathBuf>,
     /// Start time of current automation run.
     pub automation_start_time: Option<Instant>,
+    /// Interrupted sessions discovered on disk (for the resume picker).
+    pub resumable_sessions: Vec<ResumableSession>,
+    /// Index of the currently selected resumable session in the picker.
+    pub selected_resume: Option<usize>,
 }
 
 impl Default for GuiState {
@@ -106,6 +148,8 @@ impl Default for GuiState {
             status: AutomationStatus::Idle,
             latest_session_path: None,
             automation_start_time: None,
+            resumable_sessions: Vec::new(),
+            selected_resume: None,
         }
     }
 }

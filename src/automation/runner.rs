@@ -33,6 +33,26 @@ static CURRENT_STATE_DESC: Mutex<String> = Mutex::new(String::new());
 /// Current session folder path (for GUI to access after completion).
 static CURRENT_SESSION_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
+/// Final outcome of the most recent automation run (for GUI to read after the
+/// automation thread exits). Distinguishes a full completion from a timeout/error
+/// or a user abort, and records how many of the requested runs actually finished.
+#[derive(Clone, Debug)]
+pub enum AutomationOutcome {
+    /// All requested runs completed successfully.
+    Completed { completed: u32, total: u32 },
+    /// User aborted before all runs finished.
+    Aborted { completed: u32, total: u32 },
+    /// Automation stopped early due to a timeout or error.
+    Error {
+        completed: u32,
+        total: u32,
+        message: String,
+    },
+}
+
+/// Outcome of the most recently finished automation run.
+static LAST_OUTCOME: Mutex<Option<AutomationOutcome>> = Mutex::new(None);
+
 /// Default number of iterations if not specified in config.
 const DEFAULT_ITERATIONS: u32 = 10;
 
@@ -81,7 +101,31 @@ fn set_current_session_path(path: PathBuf) {
     }
 }
 
-/// Starts the automation loop in a background thread.
+/// Gets the outcome of the most recently finished automation run.
+///
+/// Returns `None` if no run has finished yet (e.g. one is still in progress, or
+/// the outcome was cleared at the start of a new run).
+pub fn get_last_outcome() -> Option<AutomationOutcome> {
+    LAST_OUTCOME.lock().ok().and_then(|o| o.clone())
+}
+
+/// Sets the outcome of the just-finished automation run (called from the
+/// automation thread before it clears the running flag).
+fn set_last_outcome(outcome: AutomationOutcome) {
+    if let Ok(mut o) = LAST_OUTCOME.lock() {
+        *o = Some(outcome);
+    }
+}
+
+/// Clears the stored outcome (called when a new run starts) so the GUI never
+/// reads a stale result from a previous run.
+fn clear_last_outcome() {
+    if let Ok(mut o) = LAST_OUTCOME.lock() {
+        *o = None;
+    }
+}
+
+/// Starts a fresh automation run in a background thread.
 ///
 /// Returns immediately after spawning the automation thread.
 /// Use `is_automation_running()` to check if automation is still active.
@@ -94,15 +138,44 @@ fn set_current_session_path(path: PathBuf) {
 /// - Automation is already running
 /// - Game window cannot be found
 pub fn start_automation(max_iterations: Option<u32>) -> Result<()> {
-    // Check if already running
+    let iterations = max_iterations.unwrap_or(DEFAULT_ITERATIONS);
+    start_automation_inner(iterations, 1, None)
+}
+
+/// Resumes a previously interrupted run, appending into its existing folder.
+///
+/// Continues iteration numbering from `completed + 1` up to the original
+/// `total`, reusing the same screenshots/, results.csv, and session.log.
+pub fn resume_automation(session_dir: PathBuf, completed: u32, total: u32) -> Result<()> {
+    if completed >= total {
+        return Err(anyhow!("Nothing to resume: {}/{} already completed", completed, total));
+    }
+    if !session_dir.exists() {
+        return Err(anyhow!(
+            "Cannot resume: session folder no longer exists: {}",
+            session_dir.display()
+        ));
+    }
+    start_automation_inner(total, completed + 1, Some(session_dir))
+}
+
+/// Shared setup for fresh and resumed runs.
+///
+/// * `iterations`     - total runs; the loop stops once this is reached
+/// * `start_iteration`- 1-based iteration to begin from (1 fresh; completed+1 resume)
+/// * `existing_session` - reuse this folder if Some (resume); else create new (fresh)
+fn start_automation_inner(
+    iterations: u32,
+    start_iteration: u32,
+    existing_session: Option<PathBuf>,
+) -> Result<()> {
     if AUTOMATION_RUNNING.swap(true, Ordering::SeqCst) {
         return Err(anyhow!("Automation is already running"));
     }
 
-    // Reset abort flag
     reset_abort_flag();
+    clear_last_outcome();
 
-    // Find game window
     let hwnd = match find_gakumas_window() {
         Ok(hwnd) => hwnd,
         Err(e) => {
@@ -112,50 +185,66 @@ pub fn start_automation(max_iterations: Option<u32>) -> Result<()> {
     };
 
     let config = get_config().clone();
-    let iterations = max_iterations.unwrap_or(DEFAULT_ITERATIONS);
+    let is_resume = existing_session.is_some();
 
-    // Create timestamped session folder: output/YYYYMMDD_HHMMSS/
-    let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let session_dir = crate::paths::get_output_dir().join(&timestamp);
+    let session_dir = match existing_session {
+        Some(dir) => dir,
+        None => {
+            let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+            crate::paths::get_output_dir().join(&timestamp)
+        }
+    };
 
-    // Create session directory structure
     if let Err(e) = fs::create_dir_all(&session_dir) {
         AUTOMATION_RUNNING.store(false, Ordering::SeqCst);
         return Err(anyhow!("Failed to create session directory: {}", e));
     }
 
-    // Store session path for GUI access
     set_current_session_path(session_dir.clone());
 
-    // Activate per-session logging
     let session_log_path = session_dir.join("session.log");
     crate::set_session_log(Some(session_log_path.clone()));
 
-    // Setup paths within session folder
     let screenshot_dir = session_dir.join("screenshots");
     let csv_path = session_dir.join("results.csv");
 
-    // Create screenshot directory if needed
     if let Err(e) = fs::create_dir_all(&screenshot_dir) {
         AUTOMATION_RUNNING.store(false, Ordering::SeqCst);
         return Err(anyhow!("Failed to create screenshot directory: {}", e));
     }
 
-    // Initialize CSV file
     if let Err(e) = init_csv(&csv_path) {
         AUTOMATION_RUNNING.store(false, Ordering::SeqCst);
         return Err(anyhow!("Failed to initialize CSV file: {}", e));
     }
 
-    // Initialize progress counters for GUI
-    CURRENT_ITERATION.store(0, Ordering::SeqCst);
+    // Seed progress with already-completed runs so the bar resumes correctly.
+    CURRENT_ITERATION.store(start_iteration.saturating_sub(1), Ordering::SeqCst);
     TOTAL_ITERATIONS.store(iterations, Ordering::SeqCst);
-    update_state_description("開始中...");
+    update_state_description(if is_resume { "再開中..." } else { "開始中..." });
 
-    crate::log(&format!(
-        "Starting automation: {} iterations (Ctrl+Shift+Q to abort)",
-        iterations
-    ));
+    // Record metadata so this run can be discovered/resumed later (M1 module).
+    crate::automation::session_meta::write_meta(
+        &session_dir,
+        &crate::automation::session_meta::RunMeta {
+            total: iterations,
+            completed: start_iteration.saturating_sub(1),
+            status: "running".to_string(),
+            message: None,
+        },
+    );
+
+    if is_resume {
+        crate::log(&format!(
+            "Resuming automation from iteration {}/{} (Ctrl+Shift+Q to abort)",
+            start_iteration, iterations
+        ));
+    } else {
+        crate::log(&format!(
+            "Starting automation: {} iterations (Ctrl+Shift+Q to abort)",
+            iterations
+        ));
+    }
     crate::log(&format!("Session folder: {}", crate::paths::relative_display(&session_dir)));
     crate::log(&format!("Screenshots: {}", crate::paths::relative_display(&screenshot_dir)));
     crate::log(&format!("Results CSV: {}", crate::paths::relative_display(&csv_path)));
@@ -169,7 +258,7 @@ pub fn start_automation(max_iterations: Option<u32>) -> Result<()> {
     thread::spawn(move || {
         // Reconstruct HWND from raw pointer value
         let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut std::ffi::c_void);
-        run_automation_loop(hwnd, config, iterations, screenshot_dir, csv_path);
+        run_automation_loop(hwnd, config, iterations, start_iteration, screenshot_dir, csv_path);
         AUTOMATION_RUNNING.store(false, Ordering::SeqCst);
         crate::log("Automation thread finished");
     });
@@ -182,6 +271,7 @@ fn run_automation_loop(
     hwnd: windows::Win32::Foundation::HWND,
     config: crate::automation::config::AutomationConfig,
     max_iterations: u32,
+    start_iteration: u32,
     screenshot_dir: PathBuf,
     csv_path: PathBuf,
 ) {
@@ -197,7 +287,9 @@ fn run_automation_loop(
     });
 
     // Create and run state machine
-    let mut ctx = AutomationContext::new(hwnd, config, max_iterations, sender, screenshot_dir);
+    let mut ctx = AutomationContext::new(
+        hwnd, config, max_iterations, start_iteration, sender, screenshot_dir,
+    );
 
     // Run state machine until complete
     loop {
@@ -220,25 +312,75 @@ fn run_automation_loop(
         }
     }
 
-    // Log final state
-    match &ctx.state {
+    // Log final state and record the outcome for the GUI. `completed_iterations`
+    // counts runs that actually captured a result, so the GUI can report exactly
+    // how far the automation got when it stops early.
+    let completed = ctx.completed_iterations;
+    let outcome = match &ctx.state {
         AutomationState::Complete => {
             crate::log(&format!(
-                "Automation completed successfully: {} iterations",
-                max_iterations
+                "Automation completed successfully: {}/{} iterations",
+                completed, max_iterations
             ));
+            AutomationOutcome::Completed {
+                completed,
+                total: max_iterations,
+            }
         }
         AutomationState::Aborted => {
             crate::log(&format!(
-                "Automation aborted at iteration {}/{}",
-                ctx.current_iteration, max_iterations
+                "Automation aborted: {}/{} iterations completed",
+                completed, max_iterations
             ));
+            AutomationOutcome::Aborted {
+                completed,
+                total: max_iterations,
+            }
         }
         AutomationState::Error(msg) => {
-            crate::log(&format!("Automation failed: {}", msg));
+            crate::log(&format!(
+                "Automation failed after {}/{} iterations: {}",
+                completed, max_iterations, msg
+            ));
+            AutomationOutcome::Error {
+                completed,
+                total: max_iterations,
+                message: msg.clone(),
+            }
         }
-        _ => {}
+        other => {
+            // Loop exited from an unexpected state (e.g. step() returned Err).
+            crate::log(&format!(
+                "Automation stopped in unexpected state {} after {}/{} iterations",
+                other, completed, max_iterations
+            ));
+            AutomationOutcome::Error {
+                completed,
+                total: max_iterations,
+                message: format!("Stopped unexpectedly ({})", other),
+            }
+        }
+    };
+
+    // Persist the final status so this session is correctly classified on disk
+    // (no longer "running"; resumable only if it stopped short of `total`).
+    let (meta_status, meta_message) = match &outcome {
+        AutomationOutcome::Completed { .. } => ("completed", None),
+        AutomationOutcome::Aborted { .. } => ("aborted", None),
+        AutomationOutcome::Error { message, .. } => ("error", Some(message.clone())),
+    };
+    if let Some(session_dir) = csv_path.parent() {
+        crate::automation::session_meta::write_meta(
+            session_dir,
+            &crate::automation::session_meta::RunMeta {
+                total: max_iterations,
+                completed,
+                status: meta_status.to_string(),
+                message: meta_message,
+            },
+        );
     }
+    set_last_outcome(outcome);
 
     // Drop the sender to signal OCR worker to finish
     drop(ctx.work_sender);
