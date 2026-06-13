@@ -29,7 +29,7 @@ You can see it working like this: shrink the window to a small size — the thir
 ## Progress
 
 - [x] (2026-06-13Z) M1: Scroll the third column. Wrapped the existing third-column rendering in `egui::ScrollArea::vertical().auto_shrink([false, false])` so content can never be clipped, with no other behavior change. `cargo check` passes with only pre-existing warnings.
-- [ ] M2: State-driven control panel. Add `PanelActions` and `render_control_panel` (+ private per-state helpers) to `src/gui/render.rs`; rewire `src/gui/mod.rs` `update()` to call it; remove the four superseded render functions. This delivers the idle/running/finished panels, the read-only running count, and the single-resume-affordance rule. (completed: —; remaining: all)
+- [x] (2026-06-13Z) M2: State-driven control panel. Added `PanelActions` + `render_control_panel` + private helpers (`render_idle`, `render_running`, `render_finished`, `render_generated_files`, `render_resume_section`) to `src/gui/render.rs`; deleted the four superseded render functions; rewired `src/gui/mod.rs` `update()` to call `render_control_panel` once and dispatch `PanelActions`. `cargo check` and `cargo build --release` pass with only pre-existing warnings; `git grep` confirms no stale references to the removed functions. Manual acceptance (Scenarios A–E) still pending — requires running the elevated binary against the game.
 
 Use timestamps (UTC) when checking off items, e.g. `- [x] (2026-06-13 14:00Z) ...`.
 
@@ -65,6 +65,8 @@ Use timestamps (UTC) when checking off items, e.g. `- [x] (2026-06-13 14:00Z) ..
 ## Outcomes & Retrospective
 
 To be completed at the end of each milestone and at full completion. Compare against Purpose: is the third column free of clipping at small window sizes, free of the 100-vs-5 contradiction during runs, and showing exactly one resume affordance appropriate to the current state?
+
+- 2026-06-13 (M1 + M2 code-complete): Both milestones implemented exactly as planned across the two files (`src/gui/render.rs`, `src/gui/mod.rs`). The anticipated borrow constraint (Surprises & Discoveries) did not surface as an error because the `let status = state.status.clone();` clone was written in from the start, as the plan prescribed — matching on the clone while mutating `state.iterations`/`state.selected_resume` compiled cleanly. `cargo check` and `cargo build --release` both finish with only the pre-existing OCR/re-export warnings (27 total, within the documented ~30). `git grep` over `src/gui` confirms none of the four removed functions are referenced anywhere. The redesign structurally addresses all three Purpose problems by construction (scroll area → no clipping; running state renders read-only `total`/`current` → no 100-vs-5; picker gated to Idle and 続行 gated to finished-interrupted → one resume affordance per state). Remaining: manual behavioral acceptance (Scenarios A–E), which requires running the elevated binary against a live game session and is not automatable here.
 
 
 ## Context and Orientation

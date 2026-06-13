@@ -489,32 +489,19 @@ impl eframe::App for GuiApp {
                     render::render_guide_image(ui, &self.guide_images[1], "② この画面で待機");
                 });
 
-                // Column 3: Controls, progress, actions (scrollable so nothing clips)
+                // Column 3: a single state-driven control panel, scrollable so nothing clips.
                 columns[2].vertical(|ui| {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            // Guide text at top of column
-                            ui.label(egui::RichText::new("③ 回数を設定して開始").strong());
-                            ui.add_space(8.0);
-
-                            let (start_clicked, stop_clicked, continue_clicked) =
-                                render::render_controls(ui, &mut self.state);
-                            if start_clicked { self.handle_start(); }
-                            if stop_clicked { self.handle_stop(); }
-                            if continue_clicked { self.handle_continue(); }
-
-                            render::render_progress(ui, &self.state);
-
-                            let (generate_clicked, open_folder_clicked) =
-                                render::render_actions(ui, &self.state);
-                            if generate_clicked { self.handle_generate_charts(); }
-                            if open_folder_clicked { self.handle_open_folder(); }
-
-                            let (refresh_clicked, resume_selected_clicked) =
-                                render::render_resume_picker(ui, &mut self.state);
-                            if refresh_clicked { self.scan_resumable_sessions(); }
-                            if resume_selected_clicked { self.handle_resume_selected(); }
+                            let actions = render::render_control_panel(ui, &mut self.state);
+                            if actions.start { self.handle_start(); }
+                            if actions.stop { self.handle_stop(); }
+                            if actions.continue_run { self.handle_continue(); }
+                            if actions.generate_charts { self.handle_generate_charts(); }
+                            if actions.open_folder { self.handle_open_folder(); }
+                            if actions.refresh_resumable { self.scan_resumable_sessions(); }
+                            if actions.resume_selected { self.handle_resume_selected(); }
                         });
                 });
             });
