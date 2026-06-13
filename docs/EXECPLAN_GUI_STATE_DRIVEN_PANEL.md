@@ -28,7 +28,7 @@ You can see it working like this: shrink the window to a small size — the thir
 
 ## Progress
 
-- [ ] M1: Scroll the third column. Wrap the existing third-column rendering in `egui::ScrollArea::vertical()` so content can never be clipped, with no other behavior change. (completed: —; remaining: all)
+- [x] (2026-06-13Z) M1: Scroll the third column. Wrapped the existing third-column rendering in `egui::ScrollArea::vertical().auto_shrink([false, false])` so content can never be clipped, with no other behavior change. `cargo check` passes with only pre-existing warnings.
 - [ ] M2: State-driven control panel. Add `PanelActions` and `render_control_panel` (+ private per-state helpers) to `src/gui/render.rs`; rewire `src/gui/mod.rs` `update()` to call it; remove the four superseded render functions. This delivers the idle/running/finished panels, the read-only running count, and the single-resume-affordance rule. (completed: —; remaining: all)
 
 Use timestamps (UTC) when checking off items, e.g. `- [x] (2026-06-13 14:00Z) ...`.

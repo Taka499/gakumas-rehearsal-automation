@@ -489,48 +489,33 @@ impl eframe::App for GuiApp {
                     render::render_guide_image(ui, &self.guide_images[1], "② この画面で待機");
                 });
 
-                // Column 3: Controls, progress, actions
+                // Column 3: Controls, progress, actions (scrollable so nothing clips)
                 columns[2].vertical(|ui| {
-                    // Guide text at top of column
-                    ui.label(egui::RichText::new("③ 回数を設定して開始").strong());
-                    ui.add_space(8.0);
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            // Guide text at top of column
+                            ui.label(egui::RichText::new("③ 回数を設定して開始").strong());
+                            ui.add_space(8.0);
 
-                    // Controls section (iteration input, start/stop/continue buttons)
-                    let (start_clicked, stop_clicked, continue_clicked) =
-                        render::render_controls(ui, &mut self.state);
+                            let (start_clicked, stop_clicked, continue_clicked) =
+                                render::render_controls(ui, &mut self.state);
+                            if start_clicked { self.handle_start(); }
+                            if stop_clicked { self.handle_stop(); }
+                            if continue_clicked { self.handle_continue(); }
 
-                    if start_clicked {
-                        self.handle_start();
-                    }
-                    if stop_clicked {
-                        self.handle_stop();
-                    }
-                    if continue_clicked {
-                        self.handle_continue();
-                    }
+                            render::render_progress(ui, &self.state);
 
-                    // Progress section
-                    render::render_progress(ui, &self.state);
+                            let (generate_clicked, open_folder_clicked) =
+                                render::render_actions(ui, &self.state);
+                            if generate_clicked { self.handle_generate_charts(); }
+                            if open_folder_clicked { self.handle_open_folder(); }
 
-                    // Action buttons section
-                    let (generate_clicked, open_folder_clicked) = render::render_actions(ui, &self.state);
-
-                    if generate_clicked {
-                        self.handle_generate_charts();
-                    }
-                    if open_folder_clicked {
-                        self.handle_open_folder();
-                    }
-
-                    // Resume-a-previous-session picker (restart survival)
-                    let (refresh_clicked, resume_selected_clicked) =
-                        render::render_resume_picker(ui, &mut self.state);
-                    if refresh_clicked {
-                        self.scan_resumable_sessions();
-                    }
-                    if resume_selected_clicked {
-                        self.handle_resume_selected();
-                    }
+                            let (refresh_clicked, resume_selected_clicked) =
+                                render::render_resume_picker(ui, &mut self.state);
+                            if refresh_clicked { self.scan_resumable_sessions(); }
+                            if resume_selected_clicked { self.handle_resume_selected(); }
+                        });
                 });
             });
         });
