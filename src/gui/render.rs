@@ -104,6 +104,24 @@ fn render_idle(ui: &mut egui::Ui, state: &mut GuiState, actions: &mut PanelActio
         actions.start = true;
     }
 
+    // Shortcut to the most recent session's results, so charts/folder stay
+    // reachable after returning to Idle (e.g. via the terminal-state 戻る button)
+    // without having to re-enter a finished state.
+    if state.latest_session_path.is_some() {
+        ui.add_space(16.0);
+        ui.separator();
+        ui.add_space(4.0);
+        ui.label(RichText::new("前回の結果").strong());
+        ui.add_space(6.0);
+        if ui.button("📊 グラフを生成").clicked() {
+            actions.generate_charts = true;
+        }
+        ui.add_space(6.0);
+        if ui.button("📁 フォルダを開く").clicked() {
+            actions.open_folder = true;
+        }
+    }
+
     if !state.resumable_sessions.is_empty() {
         ui.add_space(20.0);
         ui.separator();
@@ -313,8 +331,8 @@ fn render_resume_section(ui: &mut egui::Ui, state: &mut GuiState, actions: &mut 
                         actions.resume_selected = true;
                     }
                     if ui
-                        .button("✕")
-                        .on_hover_text("このセッションをリストから削除（データは残ります）")
+                        .button("非表示")
+                        .on_hover_text("このセッションをリストに表示しません（フォルダとデータは残ります）")
                         .clicked()
                     {
                         state.selected_resume = Some(i);

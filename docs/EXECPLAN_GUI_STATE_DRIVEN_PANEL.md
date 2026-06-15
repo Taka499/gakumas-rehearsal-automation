@@ -77,6 +77,12 @@ Use timestamps (UTC) when checking off items, e.g. `- [x] (2026-06-13 14:00Z) ..
 - Decision: Make the resume guidance prominent and reference the ② screen ("⚠ ②のリハーサル開始画面に戻してから「続行」を押してください"), in both the finished-resumable state and the idle picker, replacing the prior `.small()` text.
   Rationale: User asked that after any interruption the UI clearly tell them to return to the step-② screen before resuming.
   Date/Author: 2026-06-14 / implementation.
+- Decision: Show a "前回の結果" shortcut (📊 グラフを生成 / 📁 フォルダを開く) in the Idle panel whenever `latest_session_path` is set.
+  Rationale: The `戻る` button returns to Idle, but charts/folder actions previously lived only in the finished state, so returning to Idle lost quick access to the just-finished run's results. The shortcut keeps them reachable. (User-requested follow-up.)
+  Date/Author: 2026-06-15 / implementation.
+- Decision: Word the per-session dismiss control as "非表示" (tooltip: "このセッションをリストに表示しません（フォルダとデータは残ります）"), not "✕ … 削除".
+  Rationale: "削除" reads as destroying the session/data; the action only removes it from the resume list and keeps everything on disk. "非表示" (hide) conveys that without implying deletion. (User-chosen wording.)
+  Date/Author: 2026-06-15 / implementation.
 
 
 ## Outcomes & Retrospective
