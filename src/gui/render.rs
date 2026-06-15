@@ -6,6 +6,34 @@ use eframe::egui::{self, Color32, RichText, TextureHandle, Vec2};
 
 use super::state::{AutomationStatus, GuiState};
 
+/// One-tap run-count presets shown beneath every run-count input. Edit this
+/// single array to change the buttons everywhere they appear.
+const COUNT_PRESETS: [u32; 4] = [100, 200, 500, 1000];
+
+/// Renders a run-count input: a numeric DragValue (drag or click-to-type,
+/// clamped 1..=9999) followed by a row of one-tap preset buttons that set the
+/// value directly. Shared by the idle 実行回数 input and the 追加実行 count so
+/// both behave identically.
+fn render_count_input(ui: &mut egui::Ui, label: &str, value: &mut u32) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add(
+            egui::DragValue::new(value)
+                .range(1..=9999)
+                .speed(1.0),
+        );
+        ui.label("回");
+    });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        for preset in COUNT_PRESETS {
+            if ui.button(preset.to_string()).clicked() {
+                *value = preset;
+            }
+        }
+    });
+}
+
 /// Render a single guide image with label above.
 pub fn render_guide_image(
     ui: &mut egui::Ui,
@@ -89,15 +117,7 @@ fn render_idle(ui: &mut egui::Ui, state: &mut GuiState, actions: &mut PanelActio
     ui.label(RichText::new("③ 回数を設定して開始").strong());
     ui.add_space(8.0);
 
-    ui.horizontal(|ui| {
-        ui.label("実行回数:");
-        ui.add(
-            egui::DragValue::new(&mut state.iterations)
-                .range(1..=9999)
-                .speed(1.0),
-        );
-        ui.label("回");
-    });
+    render_count_input(ui, "実行回数:", &mut state.iterations);
 
     ui.add_space(12.0);
     if ui.button(RichText::new("▶ 開始").size(18.0)).clicked() {
