@@ -44,7 +44,7 @@ Multi-module Rust application with these key components:
 
 - **src/main.rs**: Entry point, initializes GUI or legacy tray mode
 - **src/paths.rs**: Centralized path resolution (logs/, screenshots/, output/, template/, tesseract/)
-- **src/gui/**: egui-based GUI window with progress display, controls, and guide images
+- **src/gui/**: egui-based GUI window. The third column is a single state-driven panel: `render.rs::render_control_panel` branches on `AutomationStatus` and returns a `PanelActions` struct that `mod.rs::update()` dispatches to `handle_*` methods. Add controls by emitting a button → setting a `PanelActions` field → dispatching it, not by rendering everything unconditionally.
 - **src/capture/**: Window discovery and screenshot capture via Windows Graphics Capture API
 - **src/automation/**: Rehearsal automation state machine, button detection, OCR worker, session metadata/resume (`session_meta.rs`)
 - **src/calibration/**: Interactive calibration wizard for button positions
@@ -57,7 +57,7 @@ Key technical details:
 - **GPU Pipeline**: D3D11 device creates staging texture, copies captured frame, maps for CPU read
 - **Embedded Tesseract**: `include_bytes!` embeds tesseract.zip, extracted on first run to exe directory
 - **OCR Pipeline**: Per-stage cropping (`score_regions` in config) → brightness thresholding → Tesseract `--psm 6` → sanitize leading garbage chars → regex extraction. Each stage processed independently to avoid cross-stage noise. Crop regions are tightened to exclude horizontal UI divider lines that confuse Tesseract layout analysis
-- **Session folders**: Each automation series writes to `output/YYYYMMDD_HHMMSS/` holding `screenshots/`, `results.csv`, `session.log`, `charts/`, and `run-meta.json`. `run-meta.json` (written by `session_meta.rs`) records `total`/`completed`/`status` so an interrupted series can resume into the same folder; `completed` is authoritatively recomputed from the screenshot count (crash-proof), not trusted from the file
+- **Session folders**: Each automation series writes to `output/YYYYMMDD_HHMMSS/` holding `screenshots/`, `results.csv`, `session.log`, `charts/`, and `run-meta.json`. `run-meta.json` (written by `session_meta.rs`) records `total`/`completed`/`status`/`dismissed` so an interrupted series can resume into the same folder; `completed` is authoritatively recomputed from the screenshot count (crash-proof), not trusted from the file. `dismissed: true` (set via `dismiss_session`) hides a session from the resume picker without deleting its data
 
 ## Key Constants and Hotkeys
 
@@ -78,6 +78,7 @@ Key technical details:
 - `windows` crate v0.58 feature flags must match APIs used (see Cargo.toml)
 - `SendInput` with `SetForegroundWindow` is required for game input (PostMessage is ignored)
 - Must run as Administrator if game runs elevated (UIPI restriction)
+- egui render fns: matching on `state.status` (or iterating `state.resumable_sessions`) while mutating sibling `GuiState` fields trips `E0502`. Clone the status (`let status = state.status.clone();`) or snapshot the list into an owned `Vec` first, then mutate freely
 
 ## Design Constraints
 
