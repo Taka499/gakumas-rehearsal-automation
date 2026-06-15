@@ -10,7 +10,8 @@ When working on execution plans (ExecPlans), always read the full plan document 
 
 Active ExecPlans (keep their `Progress` sections current; each is self-contained):
 - `docs/EXECPLAN_RESUME_AUTOMATION.md` - resume an interrupted automation run. Complete (committed d968a4a, acceptance passed).
-- `docs/EXECPLAN_GUI_STATE_DRIVEN_PANEL.md` - redesign the GUI third column into a state-driven control panel. Not started; M1 (scroll) then M2 (state-driven panel). See its Progress section for status.
+- `docs/EXECPLAN_GUI_STATE_DRIVEN_PANEL.md` - redesign the GUI third column into a state-driven control panel. Code-complete (merged f8e5230); manual acceptance pending. See its Progress section for status.
+- `docs/EXECPLAN_ADDITIONAL_RUNS_AND_PRESETS.md` - add "追加実行" (extend a finished series into the same folder) and 100/200/500/1000 preset run-count buttons. Not started; M1 (engine) → M2 (presets) → M3 (追加実行 GUI). See its Progress section for status.
 
 
 ## Project Overview
