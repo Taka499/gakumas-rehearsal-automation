@@ -416,6 +416,33 @@ impl GuiApp {
         }
     }
 
+    /// Return from any terminal state to Idle so the user can start a fresh run
+    /// (or reach the resume picker). Without this, a terminal state with no
+    /// resume affordance — e.g. a "game not running" error — would be a dead end.
+    fn handle_back_to_idle(&mut self) {
+        self.state.status = AutomationStatus::Idle;
+        // Re-scan so the picker reflects the current on-disk state: the
+        // just-finished run may now be resumable, or a dismissed one gone.
+        self.scan_resumable_sessions();
+        crate::log("GUI: Returned to idle");
+    }
+
+    /// Dismiss the selected interrupted session from the picker (marks it done
+    /// on disk via run-meta.json; the folder and its data are kept).
+    fn handle_dismiss_selected(&mut self) {
+        let chosen = self
+            .state
+            .selected_resume
+            .and_then(|i| self.state.resumable_sessions.get(i).cloned());
+        if let Some(s) = chosen {
+            if crate::automation::session_meta::dismiss_session(&s.path) {
+                crate::log(&format!("GUI: Dismissed session {}", s.path.display()));
+            }
+            self.state.selected_resume = None;
+            self.scan_resumable_sessions();
+        }
+    }
+
     /// Handle generate charts button click.
     fn handle_generate_charts(&self) {
         crate::log("GUI: Generating charts...");
@@ -489,48 +516,22 @@ impl eframe::App for GuiApp {
                     render::render_guide_image(ui, &self.guide_images[1], "② この画面で待機");
                 });
 
-                // Column 3: Controls, progress, actions
+                // Column 3: a single state-driven control panel, scrollable so nothing clips.
                 columns[2].vertical(|ui| {
-                    // Guide text at top of column
-                    ui.label(egui::RichText::new("③ 回数を設定して開始").strong());
-                    ui.add_space(8.0);
-
-                    // Controls section (iteration input, start/stop/continue buttons)
-                    let (start_clicked, stop_clicked, continue_clicked) =
-                        render::render_controls(ui, &mut self.state);
-
-                    if start_clicked {
-                        self.handle_start();
-                    }
-                    if stop_clicked {
-                        self.handle_stop();
-                    }
-                    if continue_clicked {
-                        self.handle_continue();
-                    }
-
-                    // Progress section
-                    render::render_progress(ui, &self.state);
-
-                    // Action buttons section
-                    let (generate_clicked, open_folder_clicked) = render::render_actions(ui, &self.state);
-
-                    if generate_clicked {
-                        self.handle_generate_charts();
-                    }
-                    if open_folder_clicked {
-                        self.handle_open_folder();
-                    }
-
-                    // Resume-a-previous-session picker (restart survival)
-                    let (refresh_clicked, resume_selected_clicked) =
-                        render::render_resume_picker(ui, &mut self.state);
-                    if refresh_clicked {
-                        self.scan_resumable_sessions();
-                    }
-                    if resume_selected_clicked {
-                        self.handle_resume_selected();
-                    }
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let actions = render::render_control_panel(ui, &mut self.state);
+                            if actions.start { self.handle_start(); }
+                            if actions.stop { self.handle_stop(); }
+                            if actions.continue_run { self.handle_continue(); }
+                            if actions.generate_charts { self.handle_generate_charts(); }
+                            if actions.open_folder { self.handle_open_folder(); }
+                            if actions.refresh_resumable { self.scan_resumable_sessions(); }
+                            if actions.resume_selected { self.handle_resume_selected(); }
+                            if actions.back_to_idle { self.handle_back_to_idle(); }
+                            if actions.dismiss_selected { self.handle_dismiss_selected(); }
+                        });
                 });
             });
         });

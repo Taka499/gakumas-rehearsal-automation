@@ -28,8 +28,8 @@ You can see it working like this: shrink the window to a small size — the thir
 
 ## Progress
 
-- [ ] M1: Scroll the third column. Wrap the existing third-column rendering in `egui::ScrollArea::vertical()` so content can never be clipped, with no other behavior change. (completed: —; remaining: all)
-- [ ] M2: State-driven control panel. Add `PanelActions` and `render_control_panel` (+ private per-state helpers) to `src/gui/render.rs`; rewire `src/gui/mod.rs` `update()` to call it; remove the four superseded render functions. This delivers the idle/running/finished panels, the read-only running count, and the single-resume-affordance rule. (completed: —; remaining: all)
+- [x] (2026-06-13Z) M1: Scroll the third column. Wrapped the existing third-column rendering in `egui::ScrollArea::vertical().auto_shrink([false, false])` so content can never be clipped, with no other behavior change. `cargo check` passes with only pre-existing warnings.
+- [x] (2026-06-13Z) M2: State-driven control panel. Added `PanelActions` + `render_control_panel` + private helpers (`render_idle`, `render_running`, `render_finished`, `render_generated_files`, `render_resume_section`) to `src/gui/render.rs`; deleted the four superseded render functions; rewired `src/gui/mod.rs` `update()` to call `render_control_panel` once and dispatch `PanelActions`. `cargo check` and `cargo build --release` pass with only pre-existing warnings; `git grep` confirms no stale references to the removed functions. Manual acceptance (Scenarios A–E) still pending — requires running the elevated binary against the game.
 
 Use timestamps (UTC) when checking off items, e.g. `- [x] (2026-06-13 14:00Z) ...`.
 
@@ -37,6 +37,8 @@ Use timestamps (UTC) when checking off items, e.g. `- [x] (2026-06-13 14:00Z) ..
 ## Surprises & Discoveries
 
 - (Add findings here as you implement, with short evidence snippets.)
+- (2026-06-14) Manual testing surfaced that making Start idle-only turned every terminal state into a dead end — a "game not running" error has no `resumable()` affordance and no Start, so the panel was stuck. Fixed with a `← 戻る` button on all terminal states. The original plan's per-state design did not account for re-entry into Idle from a terminal state.
+- (2026-06-14) The picker's borrow pattern: per-session ▶再開/✕ buttons need to write `state.selected_resume` *inside* a loop over `state.resumable_sessions`. Iterating the Vec directly while assigning a sibling field trips E0502, so the labels are snapshotted into an owned `Vec<(usize, String)>` first, then the loop runs with `state` free to mutate — same clone-to-free-the-borrow shape as `render_control_panel`'s status clone.
 - Anticipated borrow constraint (verify during M2): `render_control_panel` takes `&mut GuiState` and, inside a `match` on the status, must also mutate *other* `GuiState` fields (the run-count `DragValue` mutates `state.iterations`; the resume combo mutates `state.selected_resume`). Matching on `&state.status` while mutating sibling fields can trip the borrow checker. The plan resolves this by cloning the status once at the top (`let status = state.status.clone();` — `AutomationStatus` derives `Clone`) and matching on `&status`, leaving `state` free to mutate. If you skip the clone you will likely see `error[E0502]: cannot borrow ... as mutable because it is also borrowed as immutable`.
 
 
@@ -61,10 +63,33 @@ Use timestamps (UTC) when checking off items, e.g. `- [x] (2026-06-13 14:00Z) ..
   Rationale: Avoids a borrow-checker conflict between the immutable borrow of `state.status` (the match) and the mutable borrows of `state.iterations` / `state.selected_resume` inside the arms. See `Surprises & Discoveries`.
   Date/Author: 2026-06-13 / planning.
 
+### Post-acceptance refinements (2026-06-14, from manual testing)
+
+- Decision: Every terminal state (Completed/Aborted/Error) gets a `← 戻る` button that resets `status` to `Idle`.
+  Rationale: Making Start idle-only created a regression the original plan missed: terminal states became dead ends. A "game not running" error (`Error { completed: 0, session_path: None }`) is not `resumable()`, so it showed no 続行 and no Start — the panel could not be manipulated at all (user-reported, Image #1). Even Completed had no path to a fresh run. A back-to-Idle control fixes all of these and, as a side effect, makes the idle-only picker reachable right after a run (no app restart needed).
+  Date/Author: 2026-06-14 / implementation.
+- Decision: Render the idle resume picker as a `CollapsingHeader` collapsed by default ("中断したセッションを再開 (N件)").
+  Rationale: User feedback that an always-expanded picker (shown whenever any interrupted session exists on disk) feels redundant. Collapsing keeps it discoverable without dominating the idle panel.
+  Date/Author: 2026-06-14 / implementation.
+- Decision: Add a per-session ✕ "dismiss" that sets a `dismissed: bool` flag in `run-meta.json`; `list_resumable` skips dismissed sessions.
+  Rationale: Not every interrupted session will be resumed; abandoned ones kept the picker permanently populated. Dismiss is non-destructive (folder/data kept) and survives restart because it persists in the existing per-session metadata. Chosen over deleting the folder (destructive) and over hide-only (would not survive a rescan/restart).
+  Date/Author: 2026-06-14 / implementation.
+- Decision: Make the resume guidance prominent and reference the ② screen ("⚠ ②のリハーサル開始画面に戻してから「続行」を押してください"), in both the finished-resumable state and the idle picker, replacing the prior `.small()` text.
+  Rationale: User asked that after any interruption the UI clearly tell them to return to the step-② screen before resuming.
+  Date/Author: 2026-06-14 / implementation.
+- Decision: Show a "前回の結果" shortcut (📊 グラフを生成 / 📁 フォルダを開く) in the Idle panel whenever `latest_session_path` is set.
+  Rationale: The `戻る` button returns to Idle, but charts/folder actions previously lived only in the finished state, so returning to Idle lost quick access to the just-finished run's results. The shortcut keeps them reachable. (User-requested follow-up.)
+  Date/Author: 2026-06-15 / implementation.
+- Decision: Word the per-session dismiss control as "非表示" (tooltip: "このセッションをリストに表示しません（フォルダとデータは残ります）"), not "✕ … 削除".
+  Rationale: "削除" reads as destroying the session/data; the action only removes it from the resume list and keeps everything on disk. "非表示" (hide) conveys that without implying deletion. (User-chosen wording.)
+  Date/Author: 2026-06-15 / implementation.
+
 
 ## Outcomes & Retrospective
 
 To be completed at the end of each milestone and at full completion. Compare against Purpose: is the third column free of clipping at small window sizes, free of the 100-vs-5 contradiction during runs, and showing exactly one resume affordance appropriate to the current state?
+
+- 2026-06-13 (M1 + M2 code-complete): Both milestones implemented exactly as planned across the two files (`src/gui/render.rs`, `src/gui/mod.rs`). The anticipated borrow constraint (Surprises & Discoveries) did not surface as an error because the `let status = state.status.clone();` clone was written in from the start, as the plan prescribed — matching on the clone while mutating `state.iterations`/`state.selected_resume` compiled cleanly. `cargo check` and `cargo build --release` both finish with only the pre-existing OCR/re-export warnings (27 total, within the documented ~30). `git grep` over `src/gui` confirms none of the four removed functions are referenced anywhere. The redesign structurally addresses all three Purpose problems by construction (scroll area → no clipping; running state renders read-only `total`/`current` → no 100-vs-5; picker gated to Idle and 続行 gated to finished-interrupted → one resume affordance per state). Remaining: manual behavioral acceptance (Scenarios A–E), which requires running the elevated binary against a live game session and is not automatable here.
 
 
 ## Context and Orientation

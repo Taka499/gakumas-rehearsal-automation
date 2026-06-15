@@ -231,6 +231,7 @@ fn start_automation_inner(
             completed: start_iteration.saturating_sub(1),
             status: "running".to_string(),
             message: None,
+            dismissed: false,
         },
     );
 
@@ -377,6 +378,7 @@ fn run_automation_loop(
                 completed,
                 status: meta_status.to_string(),
                 message: meta_message,
+                dismissed: false,
             },
         );
     }

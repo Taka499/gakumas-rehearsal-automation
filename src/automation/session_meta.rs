@@ -23,6 +23,11 @@ pub struct RunMeta {
     /// Optional human-readable error/abort detail.
     #[serde(default)]
     pub message: Option<String>,
+    /// User dismissed this interrupted session from the resume picker. When
+    /// true, `list_resumable` skips it even if runs remain. Non-destructive:
+    /// the folder and its data are kept. Defaults to false for older metadata.
+    #[serde(default)]
+    pub dismissed: bool,
 }
 
 /// A session folder that was interrupted before all runs finished.
@@ -96,6 +101,10 @@ pub fn list_resumable(output_dir: &Path) -> Vec<ResumableSession> {
     dirs.reverse();
     for dir in dirs {
         if let Some(meta) = read_meta(&dir) {
+            // Sessions the user explicitly dismissed never reappear in the picker.
+            if meta.dismissed {
+                continue;
+            }
             let completed = count_captured(&dir);
             if completed < meta.total {
                 out.push(ResumableSession {
@@ -107,4 +116,25 @@ pub fn list_resumable(output_dir: &Path) -> Vec<ResumableSession> {
         }
     }
     out
+}
+
+/// Marks the session in `session_dir` as dismissed so it no longer appears in
+/// the resume picker. Reads the existing `run-meta.json`, sets `dismissed`, and
+/// writes it back, preserving the folder and its data. Returns true on success
+/// (a readable meta was found and rewritten).
+pub fn dismiss_session(session_dir: &Path) -> bool {
+    match read_meta(session_dir) {
+        Some(mut meta) => {
+            meta.dismissed = true;
+            write_meta(session_dir, &meta);
+            true
+        }
+        None => {
+            crate::log(&format!(
+                "Cannot dismiss session (no run-meta.json): {}",
+                session_dir.display()
+            ));
+            false
+        }
+    }
 }
