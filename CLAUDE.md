@@ -10,7 +10,8 @@ When working on execution plans (ExecPlans), always read the full plan document 
 
 Active ExecPlans (keep their `Progress` sections current; each is self-contained):
 - `docs/EXECPLAN_RESUME_AUTOMATION.md` - resume an interrupted automation run. Complete (committed d968a4a, acceptance passed).
-- `docs/EXECPLAN_GUI_STATE_DRIVEN_PANEL.md` - redesign the GUI third column into a state-driven control panel. Not started; M1 (scroll) then M2 (state-driven panel). See its Progress section for status.
+- `docs/EXECPLAN_GUI_STATE_DRIVEN_PANEL.md` - redesign the GUI third column into a state-driven control panel. Code-complete (merged f8e5230); manual acceptance pending. See its Progress section for status.
+- `docs/EXECPLAN_ADDITIONAL_RUNS_AND_PRESETS.md` - add "追加実行" (extend a finished series into the same folder) and 100/200/500/1000 preset run-count buttons. Code-complete (M1–M3); manual acceptance pending. See its Progress section for status.
 
 
 ## Project Overview
@@ -46,7 +47,7 @@ Multi-module Rust application with these key components:
 - **src/paths.rs**: Centralized path resolution (logs/, screenshots/, output/, template/, tesseract/)
 - **src/gui/**: egui-based GUI window. The third column is a single state-driven panel: `render.rs::render_control_panel` branches on `AutomationStatus` and returns a `PanelActions` struct that `mod.rs::update()` dispatches to `handle_*` methods. Add controls by emitting a button → setting a `PanelActions` field → dispatching it, not by rendering everything unconditionally.
 - **src/capture/**: Window discovery and screenshot capture via Windows Graphics Capture API
-- **src/automation/**: Rehearsal automation state machine, button detection, OCR worker, session metadata/resume (`session_meta.rs`)
+- **src/automation/**: Rehearsal automation state machine, button detection, OCR worker, session metadata/resume (`session_meta.rs`). Every "run N iterations" variant — `start_automation` (fresh), `resume_automation` (finish remaining), `extend_automation` (add more to a finished series) — delegates to `runner.rs::start_automation_inner(iterations, start_iteration, existing_session)`; wrap it rather than duplicating the window/CSV/log/meta/thread setup. After starting, the GUI reads the live total/current from runner atomics (`get_total_iterations`/`get_current_iteration`), not by recomputing.
 - **src/calibration/**: Interactive calibration wizard for button positions
 - **src/ocr/**: Tesseract integration with per-stage crop→threshold→OCR→extract pipeline
 - **src/analysis/**: Statistics calculation and chart generation (plotters)

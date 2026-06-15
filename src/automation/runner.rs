@@ -159,6 +159,30 @@ pub fn resume_automation(session_dir: PathBuf, completed: u32, total: u32) -> Re
     start_automation_inner(total, completed + 1, Some(session_dir))
 }
 
+/// Extends a finished run with `additional` brand-new iterations, appending
+/// into its existing folder.
+///
+/// The number of already-captured runs is recomputed from the screenshots on
+/// disk (the crash-proof source of truth), so the caller need only say how
+/// many *more* runs to perform. New iterations are numbered `completed + 1`
+/// through `completed + additional`, reusing the same screenshots/,
+/// results.csv, session.log, and run-meta.json (whose `total` becomes the new,
+/// larger value).
+pub fn extend_automation(session_dir: PathBuf, additional: u32) -> Result<()> {
+    if additional == 0 {
+        return Err(anyhow!("Nothing to add: requested 0 additional runs"));
+    }
+    if !session_dir.exists() {
+        return Err(anyhow!(
+            "Cannot extend: session folder no longer exists: {}",
+            session_dir.display()
+        ));
+    }
+    let completed = crate::automation::session_meta::count_captured(&session_dir);
+    let new_total = completed + additional;
+    start_automation_inner(new_total, completed + 1, Some(session_dir))
+}
+
 /// Shared setup for fresh and resumed runs.
 ///
 /// * `iterations`     - total runs; the loop stops once this is reached

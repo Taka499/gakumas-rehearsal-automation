@@ -6,6 +6,56 @@ use eframe::egui::{self, Color32, RichText, TextureHandle, Vec2};
 
 use super::state::{AutomationStatus, GuiState};
 
+/// One-tap run-count presets shown beneath every run-count input. Edit this
+/// single array to change the buttons everywhere they appear.
+const COUNT_PRESETS: [u32; 4] = [100, 200, 500, 1000];
+
+/// Renders a run-count input: a numeric DragValue (drag or click-to-type,
+/// clamped 1..=9999) followed by a row of one-tap preset buttons that set the
+/// value directly. Shared by the idle 実行回数 input and the 追加実行 count so
+/// both behave identically.
+fn render_count_input(ui: &mut egui::Ui, label: &str, value: &mut u32) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add(
+            egui::DragValue::new(value)
+                .range(1..=9999)
+                .speed(1.0),
+        );
+        ui.label("回");
+    });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        for preset in COUNT_PRESETS {
+            if ui.button(preset.to_string()).clicked() {
+                *value = preset;
+            }
+        }
+    });
+}
+
+/// The 追加実行 (extend) control: a warning to return to the ② screen, a
+/// count input with presets, and a button. Sets `actions.extend` when pressed.
+/// `additional` is the GuiState field holding the extend count.
+fn render_extend_section(ui: &mut egui::Ui, additional: &mut u32, actions: &mut PanelActions) {
+    ui.add_space(16.0);
+    ui.separator();
+    ui.add_space(4.0);
+    ui.label(RichText::new("追加実行").strong());
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new("⚠ ②のリハーサル開始画面に戻してから追加実行してください")
+            .color(Color32::from_rgb(200, 120, 0))
+            .small(),
+    );
+    ui.add_space(6.0);
+    render_count_input(ui, "追加回数:", additional);
+    ui.add_space(8.0);
+    if ui.button(RichText::new("➕ 追加実行").size(16.0)).clicked() {
+        actions.extend = true;
+    }
+}
+
 /// Render a single guide image with label above.
 pub fn render_guide_image(
     ui: &mut egui::Ui,
@@ -57,6 +107,8 @@ pub struct PanelActions {
     pub back_to_idle: bool,
     /// Dismiss the session at `state.selected_resume` from the resume picker.
     pub dismiss_selected: bool,
+    /// Run additional iterations into the most recent session's folder.
+    pub extend: bool,
 }
 
 /// Renders the entire third column as a single state-driven panel: only the
@@ -89,15 +141,7 @@ fn render_idle(ui: &mut egui::Ui, state: &mut GuiState, actions: &mut PanelActio
     ui.label(RichText::new("③ 回数を設定して開始").strong());
     ui.add_space(8.0);
 
-    ui.horizontal(|ui| {
-        ui.label("実行回数:");
-        ui.add(
-            egui::DragValue::new(&mut state.iterations)
-                .range(1..=9999)
-                .speed(1.0),
-        );
-        ui.label("回");
-    });
+    render_count_input(ui, "実行回数:", &mut state.iterations);
 
     ui.add_space(12.0);
     if ui.button(RichText::new("▶ 開始").size(18.0)).clicked() {
@@ -120,6 +164,7 @@ fn render_idle(ui: &mut egui::Ui, state: &mut GuiState, actions: &mut PanelActio
         if ui.button("📁 フォルダを開く").clicked() {
             actions.open_folder = true;
         }
+        render_extend_section(ui, &mut state.additional_iterations, actions);
     }
 
     if !state.resumable_sessions.is_empty() {
@@ -182,7 +227,7 @@ fn render_running(
 /// and chart/folder actions.
 fn render_finished(
     ui: &mut egui::Ui,
-    state: &GuiState,
+    state: &mut GuiState,
     status: &AutomationStatus,
     actions: &mut PanelActions,
 ) {
@@ -235,8 +280,8 @@ fn render_finished(
         AutomationStatus::Error { session_path, .. } => session_path.clone(),
         _ => None,
     };
-    if let Some(path) = session_path {
-        render_generated_files(ui, &path);
+    if let Some(path) = session_path.as_ref() {
+        render_generated_files(ui, path);
     }
 
     ui.add_space(16.0);
@@ -251,6 +296,13 @@ fn render_finished(
             actions.open_folder = true;
         }
     });
+
+    // 追加実行 (extend): only for a finished series that is NOT resumable
+    // (Completed, or a non-resumable terminal state) and that has a folder.
+    // Mutually exclusive with the 続行 button rendered above.
+    if status.resumable().is_none() && session_path.is_some() {
+        render_extend_section(ui, &mut state.additional_iterations, actions);
+    }
 }
 
 /// Lists which result files exist in a finished session's folder.

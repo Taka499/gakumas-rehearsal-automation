@@ -16,7 +16,8 @@ use tray_icon::{
 };
 
 use crate::automation::runner::{
-    get_last_outcome, is_automation_running, resume_automation, start_automation, AutomationOutcome,
+    extend_automation, get_last_outcome, is_automation_running, resume_automation, start_automation,
+    AutomationOutcome,
 };
 use crate::automation::state::request_abort;
 
@@ -367,6 +368,45 @@ impl GuiApp {
         }
     }
 
+    /// Handle "➕ 追加実行" — runs `additional_iterations` more runs into the most
+    /// recent session's folder, continuing its numbering.
+    fn handle_extend(&mut self) {
+        let additional = self.state.additional_iterations;
+        let session_path = match &self.state.latest_session_path {
+            Some(p) => p.clone(),
+            None => {
+                crate::log("GUI: 追加実行 requested but no recent session is known");
+                return;
+            }
+        };
+        match extend_automation(session_path.clone(), additional) {
+            Ok(()) => {
+                self.state.latest_session_path =
+                    crate::automation::runner::get_current_session_path();
+                // start_automation_inner has already seeded these atomics:
+                // TOTAL_ITERATIONS = completed + additional, CURRENT_ITERATION = completed.
+                let total = crate::automation::runner::get_total_iterations();
+                let current = crate::automation::runner::get_current_iteration();
+                self.state.status = AutomationStatus::Running {
+                    current,
+                    total,
+                    state_description: "追加実行中...".to_string(),
+                    start_time: std::time::Instant::now(),
+                };
+                self.state.automation_start_time = Some(std::time::Instant::now());
+                crate::log(&format!(
+                    "GUI: 追加実行 {}回 → {} (folder {})",
+                    additional,
+                    total,
+                    session_path.display()
+                ));
+            }
+            Err(e) => {
+                crate::log(&format!("GUI: Failed to extend automation: {}", e));
+            }
+        }
+    }
+
     /// Rescan the output directory for interrupted sessions that can be resumed.
     fn scan_resumable_sessions(&mut self) {
         let dir = crate::paths::get_output_dir();
@@ -531,6 +571,7 @@ impl eframe::App for GuiApp {
                             if actions.resume_selected { self.handle_resume_selected(); }
                             if actions.back_to_idle { self.handle_back_to_idle(); }
                             if actions.dismiss_selected { self.handle_dismiss_selected(); }
+                            if actions.extend { self.handle_extend(); }
                         });
                 });
             });

@@ -24,4 +24,6 @@ pub use detection::{
     ClickRetryInfo,
 };
 pub use input::{click_at_relative, test_postmessage_click, test_sendinput_click};
-pub use runner::{is_automation_running, request_abort, resume_automation, start_automation};
+pub use runner::{
+    extend_automation, is_automation_running, request_abort, resume_automation, start_automation,
+};

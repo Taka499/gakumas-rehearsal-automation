@@ -129,6 +129,10 @@ impl AutomationStatus {
 pub struct GuiState {
     /// Number of iterations to run (user input).
     pub iterations: u32,
+    /// Number of *additional* runs for the 追加実行 (extend) control, kept
+    /// separate from `iterations` so the fresh-run count and the extend count do
+    /// not overwrite each other.
+    pub additional_iterations: u32,
     /// Current automation status.
     pub status: AutomationStatus,
     /// Path to the latest session folder (for "Open Folder" button).
@@ -145,6 +149,7 @@ impl Default for GuiState {
     fn default() -> Self {
         Self {
             iterations: 100,
+            additional_iterations: 100,
             status: AutomationStatus::Idle,
             latest_session_path: None,
             automation_start_time: None,
