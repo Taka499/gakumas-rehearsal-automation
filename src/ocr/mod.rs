@@ -17,6 +17,7 @@ use crate::automation::config::RelativeRect;
 use preprocess::{blue_mask, crop_region};
 use engine::{recognize_image_line, recognize_single_number};
 use extract::extract_single_stage;
+use reconcile::reconcile_stage;
 
 /// Per-stage OCR readout: the nine per-character scores plus the isolated
 /// stage total and bonus badge that drive checksum reconstruction.
@@ -77,14 +78,80 @@ pub fn ocr_screenshot(
         let bonus_bin = blue_mask(&bonus_crop, bonus_blue_min, bonus_br_margin);
         readout.bonuses[stage_idx] = recognize_single_number(&bonus_bin, "0123456789+", true)?;
 
-        crate::log(&format!(
-            "OCR stage {}: scores={:?} total={:?} bonus={:?}",
-            stage_idx + 1,
-            readout.scores[stage_idx],
-            readout.totals[stage_idx],
-            readout.bonuses[stage_idx]
-        ));
+        // Reconstruct overlapping-million corruption via the total/bonus checksum.
+        let raw = readout.scores[stage_idx];
+        let (reconciled, flag) =
+            reconcile_stage(raw, readout.totals[stage_idx], readout.bonuses[stage_idx]);
+        readout.scores[stage_idx] = reconciled;
+        readout.flags[stage_idx] = flag;
+
+        let total = readout.totals[stage_idx];
+        let bonus = readout.bonuses[stage_idx];
+        match flag {
+            Recovery::Ok => crate::log(&format!(
+                "OCR stage {}: scores={:?} total={:?} bonus={:?} (ok)",
+                stage_idx + 1, reconciled, total, bonus
+            )),
+            Recovery::Repaired => crate::log(&format!(
+                "OCR stage {}: REPAIRED {:?} -> {:?} (total={:?} bonus={:?})",
+                stage_idx + 1, raw, reconciled, total, bonus
+            )),
+            Recovery::Flagged => crate::log(&format!(
+                "OCR stage {}: FLAGGED for review, raw={:?} kept={:?} (total={:?} bonus={:?})",
+                stage_idx + 1, raw, reconciled, total, bonus
+            )),
+        }
     }
 
     Ok(readout)
+}
+
+#[cfg(test)]
+mod e2e_tests {
+    //! End-to-end acceptance for the overlap-score recovery (M2/M4).
+    //!
+    //! These run the real Tesseract pipeline on the checked-in sample PNGs, so
+    //! they are `#[ignore]`d (Tesseract isn't present in a bare unit-test run,
+    //! and the admin manifest blocks `cargo test` unless built with
+    //! `GAKUMAS_NO_MANIFEST=1`). Run explicitly with:
+    //!
+    //!     GAKUMAS_NO_MANIFEST=1 cargo test ocr_overlap_recovery_e2e -- --ignored --nocapture
+    use super::*;
+    use crate::ocr::reconcile::Recovery;
+
+    #[test]
+    #[ignore = "requires embedded Tesseract + sample PNGs; run with --ignored"]
+    fn ocr_overlap_recovery_e2e() {
+        crate::automation::config::init_config();
+        crate::ocr::ensure_tesseract().expect("extract embedded tesseract");
+        let config = crate::automation::config::get_config();
+
+        // (path, expected stage-2 scores, expected stage-2 recovery)
+        let cases: [(&str, [u32; 3], Recovery); 4] = [
+            ("temp/failed_overlapped_samples/003_20260618_101738.png", [1327533, 1151661, 0], Recovery::Repaired),
+            ("temp/failed_overlapped_samples/005_20260618_101804.png", [1083349, 1062741, 0], Recovery::Repaired),
+            ("temp/failed_overlapped_samples/gakumas_20260618_102842.png", [1172665, 1161196, 1093518], Recovery::Repaired),
+            ("temp/failed_overlapped_samples/gakumas_20260618_102623.png", [912127, 1171024, 1004816], Recovery::Ok),
+        ];
+
+        let mut failures = Vec::new();
+        for (path, want_scores, want_rec) in cases {
+            let img = image::open(path)
+                .unwrap_or_else(|e| panic!("open {path}: {e}"))
+                .to_rgba8();
+            let r = ocr_screenshot(&img, &config.score_regions, &config.total_regions, &config.bonus_regions)
+                .unwrap_or_else(|e| panic!("ocr {path}: {e}"));
+            println!(
+                "{path}\n  stage2 scores={:?} total={:?} bonus={:?} flag={:?}",
+                r.scores[1], r.totals[1], r.bonuses[1], r.flags[1]
+            );
+            if r.scores[1] != want_scores || r.flags[1] != want_rec {
+                failures.push(format!(
+                    "{path}: got scores={:?} flag={:?}, want scores={:?} flag={:?}",
+                    r.scores[1], r.flags[1], want_scores, want_rec
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "stage-2 mismatches:\n{}", failures.join("\n"));
+    }
 }

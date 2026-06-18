@@ -9,7 +9,18 @@ use std::sync::mpsc::Receiver;
 use crate::automation::config::RelativeRect;
 use crate::automation::csv_writer::{append_to_csv, append_to_raw_csv};
 use crate::automation::queue::OcrWorkItem;
-use crate::ocr::ocr_screenshot;
+use crate::ocr::{ocr_screenshot, Recovery};
+
+/// Worst recovery outcome across the three stages (Flagged > Repaired > Ok).
+fn worst_recovery(flags: &[Recovery; 3]) -> Recovery {
+    if flags.contains(&Recovery::Flagged) {
+        Recovery::Flagged
+    } else if flags.contains(&Recovery::Repaired) {
+        Recovery::Repaired
+    } else {
+        Recovery::Ok
+    }
+}
 
 /// Runs the OCR worker loop.
 ///
@@ -68,8 +79,30 @@ pub fn run_ocr_worker(
                     work_item.iteration, scores[0], scores[1], scores[2]
                 ));
 
+                // Overlap-reconstruction outcome (worst of the three stages).
+                let recovery = worst_recovery(&readout.flags);
+                let recovery_str = match recovery {
+                    Recovery::Ok => "ok",
+                    Recovery::Repaired => "repaired",
+                    Recovery::Flagged => "flagged",
+                };
+                match recovery {
+                    Recovery::Flagged => crate::log(&format!(
+                        "OCR worker: iteration {} FLAGGED for review — {} (scores={:?}, flags={:?})",
+                        work_item.iteration,
+                        crate::paths::relative_display(&work_item.screenshot_path),
+                        scores,
+                        readout.flags
+                    )),
+                    Recovery::Repaired => crate::log(&format!(
+                        "OCR worker: iteration {} scores repaired (flags={:?})",
+                        work_item.iteration, readout.flags
+                    )),
+                    Recovery::Ok => {}
+                }
+
                 // Append to CSV
-                if let Err(e) = append_to_csv(&csv_path, &work_item, &scores) {
+                if let Err(e) = append_to_csv(&csv_path, &work_item, &scores, recovery_str) {
                     crate::log(&format!(
                         "OCR worker: failed to write CSV for iteration {}: {}",
                         work_item.iteration, e
