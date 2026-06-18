@@ -24,8 +24,20 @@ pub enum Recovery {
     Flagged,
 }
 
-/// A per-character score is never 2,000,000 or larger (invariant 1).
-const MAX_SCORE: u32 = 2_000_000;
+/// Upper bound on a single per-character score (exclusive), used to prune
+/// reconstruction candidates and bound the dropped-leading-digit search.
+///
+/// The original invariant was "< 2,000,000" (a 7-digit score is always
+/// `1,XXX,XXX`). Scores have since approached that ceiling, so this is raised to
+/// 3,000,000 to keep collision recovery working for `2,XXX,XXX` values (the
+/// dropped leading digit can now be 1 or 2). 3M is chosen deliberately: it stays
+/// below the points where the bonus (`floor(max/5)`, here < 600,000, a clean
+/// 6-digit number) or the total (here < ~9.6M, still 7 digits) would overflow
+/// their digit guards. Note a *clean* read above this bound is unaffected — the
+/// raw value is always a candidate and passes the checksum at cost 0 — only
+/// in-collision recovery of a score >= 3M would fall back to a flag. Raise this
+/// (and revisit the bonus/total guards) if scores ever exceed it.
+const MAX_SCORE: u32 = 3_000_000;
 
 /// Reconstructs one stage's three per-character scores from the OCR'd scores
 /// plus the optional stage total and bonus.
@@ -66,9 +78,12 @@ pub fn reconcile_stage(
     for &a in &cand[0] {
         for &b in &cand[1] {
             for &c in &cand[2] {
+                let combo = [a, b, c];
+                if !physically_valid(combo, ocr_scores) {
+                    continue;
+                }
                 let max = a.max(b).max(c);
                 if a + b + c + max / 5 == total {
-                    let combo = [a, b, c];
                     solutions.push((combo, cost(combo, ocr_scores)));
                 }
             }
@@ -119,6 +134,25 @@ pub fn reconcile_stage(
     (chosen, recovery)
 }
 
+/// Rejects physically-impossible reconstructions. A slot counts as "restored"
+/// (had a dropped leading digit) when its raw value was < 1,000,000 but the
+/// reconstructed value is >= 1,000,000. Per invariants 2–3 a leading digit is
+/// only ever dropped at a collision between two adjacent >= 1,000,000 scores, so:
+///   - the leftmost slot can never be restored (it has no left neighbour), and
+///   - a restored slot's left neighbour must itself be >= 1,000,000.
+/// This eliminates spurious million-trades (e.g. reading `…,1200000,1100000` as
+/// `…,200000,2100000`, which would require restoring a slot whose left neighbour
+/// is sub-million).
+fn physically_valid(combo: [u32; 3], raw: [u32; 3]) -> bool {
+    for i in 0..3 {
+        let restored = raw[i] < 1_000_000 && combo[i] >= 1_000_000;
+        if restored && (i == 0 || combo[i - 1] < 1_000_000) {
+            return false;
+        }
+    }
+    true
+}
+
 /// `floor(max(combo) / 5)` — the bonus the game would render for this combo.
 fn derived_bonus(combo: [u32; 3]) -> u32 {
     combo.iter().copied().max().unwrap_or(0) / 5
@@ -127,10 +161,13 @@ fn derived_bonus(combo: [u32; 3]) -> u32 {
 /// Builds the candidate value set for one slot (ExecPlan step 2).
 ///
 /// Always includes the raw value. If the raw is a plausible victim of a dropped
-/// leading "1" (>= 1000 and < 1,000,000), also includes raw + 1,000,000. For
-/// every base >= 100,000, includes the ten units-digit variants (covers the
-/// corrupted left-units digit). Generated variants are capped to < 2,000,000
-/// (invariant 1); the raw is always kept. A dash slot (0) contributes only {0}.
+/// leading digit (>= 1000 and < 1,000,000), also includes raw + d*1,000,000 for
+/// each leading digit `d` that keeps the result below `MAX_SCORE` (d = 1 for a
+/// `1,XXX,XXX` victim, d = 2 for a `2,XXX,XXX` one). For every base >= 100,000,
+/// includes the ten units-digit variants (covers the corrupted left-units
+/// digit). Generated variants are capped to < `MAX_SCORE`; the raw is always
+/// kept (so a clean read above the cap still survives). A dash slot (0)
+/// contributes only {0}.
 fn candidates(v: u32) -> Vec<u32> {
     if v == 0 {
         return vec![0];
@@ -138,7 +175,13 @@ fn candidates(v: u32) -> Vec<u32> {
 
     let mut bases = vec![v];
     if (1_000..1_000_000).contains(&v) {
-        bases.push(v + 1_000_000);
+        for d in 1..=9u32 {
+            let restored = v + d * 1_000_000;
+            if restored >= MAX_SCORE {
+                break;
+            }
+            bases.push(restored);
+        }
     }
 
     let mut out = vec![v];
@@ -268,35 +311,56 @@ pub fn reconstruct_from_digits(
                 off += comp[i];
             }
 
-            for mask in 0u32..(1 << k) {
-                let mut restored = [false; 3];
-                let mut base = [0u32; 3];
-                let mut valid = true;
-
-                for i in 0..k {
-                    let r = (mask >> i) & 1 == 1;
-                    if r {
-                        // A restored part lost its leading "1"; only a non-first
-                        // 6-digit part qualifies (1 + 6 digits = a 1,XXX,XXX score).
-                        if i == 0 || comp[i] != 6 {
-                            valid = false;
+            // Per-part value options: the literal value, plus — for a non-first
+            // 6-digit part that lost a leading digit — `d,XXX,XXX` for each
+            // leading digit `d` (1..) keeping it below MAX_SCORE. A 7-digit
+            // literal may start with any digit now (scores can exceed 2M).
+            let mut popts: [Vec<(u32, bool)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+            let mut comp_valid = true;
+            for i in 0..k {
+                let v: u32 = std::str::from_utf8(parts[i]).unwrap().parse().unwrap_or(u32::MAX);
+                if v < MAX_SCORE {
+                    popts[i].push((v, false));
+                }
+                if i > 0 && comp[i] == 6 {
+                    for d in 1..=9u32 {
+                        let rv = d * 1_000_000 + v;
+                        if rv >= MAX_SCORE {
                             break;
                         }
-                        restored[i] = true;
-                    } else if comp[i] == 7 && parts[i][0] != b'1' {
-                        // A 7-digit score must be 1,XXX,XXX (invariant 1).
-                        valid = false;
-                        break;
-                    }
-
-                    let v: u32 = std::str::from_utf8(parts[i]).unwrap().parse().unwrap_or(u32::MAX);
-                    base[i] = if restored[i] { 1_000_000 + v } else { v };
-                    if base[i] >= MAX_SCORE {
-                        valid = false;
-                        break;
+                        popts[i].push((rv, true));
                     }
                 }
-                if !valid {
+                if popts[i].is_empty() {
+                    comp_valid = false;
+                    break;
+                }
+            }
+            if !comp_valid {
+                continue;
+            }
+
+            // Cartesian product of the per-part options (mixed-radix counter).
+            let sizes: [usize; 3] = [
+                popts[0].len().max(1),
+                popts[1].len().max(1),
+                popts[2].len().max(1),
+            ];
+            let combo_count: usize = (0..k).map(|i| sizes[i]).product();
+            for sel in 0..combo_count {
+                let mut base = [0u32; 3];
+                let mut restored = [false; 3];
+                let mut x = sel;
+                for i in 0..k {
+                    let (val, isr) = popts[i][x % sizes[i]];
+                    x /= sizes[i];
+                    base[i] = val;
+                    restored[i] = isr;
+                }
+
+                // A restored part needs a >= 1M left neighbour (a collision
+                // partner); reject physically-impossible million-trades.
+                if (0..k).any(|i| restored[i] && (i == 0 || base[i - 1] < 1_000_000)) {
                     continue;
                 }
 
@@ -566,6 +630,45 @@ mod tests {
     fn test_reconstruct_wrong_total_no_solution() {
         // A total no partition can satisfy yields None (caller keeps the flag).
         assert!(reconstruct_from_digits("13142492065371103897", Some(9999999), Some(262849)).is_none());
+    }
+
+    // --- Scores at/above 2,000,000 (relaxed invariant 1). ---
+
+    #[test]
+    fn test_clean_two_million_no_collision_ok() {
+        // A clean >= 2M read (no overlap) is confirmed by the checksum at cost 0.
+        let (scores, rec) =
+            reconcile_stage([2134567, 500000, 300000], Some(3361480), Some(426913));
+        assert_eq!(scores, [2134567, 500000, 300000]);
+        assert_eq!(rec, Recovery::Ok);
+    }
+
+    #[test]
+    fn test_collision_with_two_million_neighbour() {
+        // c1 is 2,134,567 (its units misread 7->9); c2 lost its leading "1".
+        let (scores, rec) =
+            reconcile_stage([2134569, 200000, 0], Some(3761480), Some(426913));
+        assert_eq!(scores, [2134567, 1200000, 0]);
+        assert_eq!(rec, Recovery::Repaired);
+    }
+
+    #[test]
+    fn test_collision_restored_victim_is_two_million() {
+        // The restored (right-operand) victim is 2,134,567 — it lost a leading
+        // "2", not "1" (d=2 restore). c1's units were corrupted 0->3.
+        let (scores, rec) =
+            reconcile_stage([1500003, 134567, 0], Some(4061480), Some(426913));
+        assert_eq!(scores, [1500000, 2134567, 0]);
+        assert_eq!(rec, Recovery::Repaired);
+    }
+
+    #[test]
+    fn test_reconstruct_two_collisions_with_two_million() {
+        // Three >= 1M scores, c1 >= 2M, both junctions dropped a leading "1".
+        let (scores, rec) =
+            reconstruct_from_digits("2134567200000100000", Some(4861480), Some(426913)).unwrap();
+        assert_eq!(scores, [2134567, 1200000, 1100000]);
+        assert_eq!(rec, Recovery::Repaired);
     }
 
     #[test]

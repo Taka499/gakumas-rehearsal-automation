@@ -29,8 +29,9 @@ const SCORE_PATTERN: &str =
 ///
 /// The pattern is therefore capped to a single legal score shape per match.
 /// A legal score token is exactly one of:
-/// - a millions score `1,XXX,XXX` — a 7-digit per-character score is always
-///   `1,XXX,XXX` (no character reaches 2,000,000), so its leading digit is "1";
+/// - a millions score `X,XXX,XXX` — a single leading digit, then two comma
+///   groups. The leading digit is `[1-9]`, not just "1": scores can now exceed
+///   2,000,000 (a `2,XXX,XXX` would otherwise be mis-split into `2,XXX` + `XXX`);
 /// - a sub-million score `XXX,XXX` (one optional comma group; also matches a
 ///   bare `\d{1,3}`);
 /// - a run of dash characters (a missing/blank character slot).
@@ -39,17 +40,17 @@ const SCORE_PATTERN: &str =
 /// the leftmost match at each position. On "1,327,534,151,661" the first
 /// alternative matches "1,327,534", then scanning resumes, skips the comma, and
 /// the sub-million alternative matches "151,661". On "912,1271,171,0241,004,816"
-/// the millions alternative cannot match at "912" (does not start "1,"), so the
-/// sub-million alternative matches "912,127"; then "1,171,024" and "1,004,816"
-/// match the millions alternative. Over-long runs split and the previously-correct
-/// readings are unchanged. Because every token now has at most seven digits,
-/// `parse_score` can never overflow `u32`.
+/// the millions alternative cannot match at "912" (three digits before the first
+/// comma, not one), so the sub-million alternative matches "912,127"; then
+/// "1,171,024" and "1,004,816" match the millions alternative. Over-long runs
+/// split and the previously-correct readings are unchanged. Because every token
+/// now has at most seven digits, `parse_score` can never overflow `u32`.
 ///
 /// This assumes scores are rendered with thousand separators, which the game
 /// always does. A genuinely comma-less number (not observed in practice) would
 /// be over-split into 3-digit chunks.
 const SCORE_TOKEN_PATTERN: &str =
-    r"1[,.]\d{3}[,.]\d{3}|\d{1,3}(?:[,.]\d{3})?|[\-\u{2014}\u{2013}\u{2015}\u{2500}\u{30FC}\u{4E00}]+";
+    r"[1-9][,.]\d{3}[,.]\d{3}|\d{1,3}(?:[,.]\d{3})?|[\-\u{2014}\u{2013}\u{2015}\u{2500}\u{30FC}\u{4E00}]+";
 
 /// Minimum confidence threshold for accepting OCR lines
 const MIN_CONFIDENCE: f32 = 60.0;
@@ -467,6 +468,15 @@ mod tests {
         let lines = make_raw_line("1,172,669,,161,1961,093,518");
         let result = extract_single_stage(&lines).unwrap();
         assert_eq!(result, [1172669, 161196, 1093518]);
+    }
+
+    #[test]
+    fn test_clean_two_million_score_not_mis_split() {
+        // A clean >= 2,000,000 score (no overlap) must tokenize as one number,
+        // not split into "2,134" + "567" (the old leading-"1"-only pattern did).
+        let lines = make_raw_line("2,134,567 1,500,000 ー");
+        let result = extract_single_stage(&lines).unwrap();
+        assert_eq!(result, [2134567, 1500000, 0]);
     }
 
     #[test]
