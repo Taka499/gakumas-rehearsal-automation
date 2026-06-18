@@ -3,8 +3,17 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
-    // Embed the Windows manifest that requests administrator privileges
-    let _ = embed_resource::compile("gakumas-screenshot.rc", embed_resource::NONE);
+    // Embed the Windows manifest that requests administrator privileges.
+    //
+    // The manifest forces elevation, which also propagates to the `cargo test`
+    // harness binary and makes it un-runnable from a non-elevated shell (os
+    // error 740). Setting GAKUMAS_NO_MANIFEST=1 skips embedding so the pure
+    // unit tests (extract/reconcile/etc.) can run; normal and release builds
+    // leave it unset and embed the manifest exactly as before.
+    println!("cargo:rerun-if-env-changed=GAKUMAS_NO_MANIFEST");
+    if env::var_os("GAKUMAS_NO_MANIFEST").is_none() {
+        let _ = embed_resource::compile("gakumas-screenshot.rc", embed_resource::NONE);
+    }
 
     // Copy resources and config to target directory
     copy_templates();

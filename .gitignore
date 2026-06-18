@@ -5,5 +5,12 @@ Cargo.lock
 *.png
 !resources/template/**/*.png
 !resources/guide/**/*.png
+!tests/fixtures/**/*.png
 tmpclaude-*
 /debug/
+
+# Python (debug/calibration tooling under scripts/)
+__pycache__/
+*.py[cod]
+.venv/
+.uv/

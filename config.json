@@ -42,9 +42,52 @@
     "y": 0.5
   },
   "ocr_threshold": 190,
+  "total_threshold": 210,
+  "bonus_blue_min": 190,
+  "bonus_br_margin": 30,
   "score_regions": [
     { "x": 0.0, "y": 0.179, "width": 1.0, "height": 0.022 },
     { "x": 0.0, "y": 0.430, "width": 1.0, "height": 0.022 },
     { "x": 0.0, "y": 0.685, "width": 1.0, "height": 0.022 }
+  ],
+  "total_regions": [
+    {
+      "x": 0.29,
+      "y": 0.137,
+      "width": 0.4,
+      "height": 0.035
+    },
+    {
+      "x": 0.29,
+      "y": 0.388,
+      "width": 0.4,
+      "height": 0.035
+    },
+    {
+      "x": 0.29,
+      "y": 0.641,
+      "width": 0.4,
+      "height": 0.035
+    }
+  ],
+  "bonus_regions": [
+    {
+      "x": 0.28,
+      "y": 0.201,
+      "width": 0.45,
+      "height": 0.022
+    },
+    {
+      "x": 0.2806,
+      "y": 0.452,
+      "width": 0.45,
+      "height": 0.022
+    },
+    {
+      "x": 0.28,
+      "y": 0.706,
+      "width": 0.45,
+      "height": 0.022
+    }
   ]
 }

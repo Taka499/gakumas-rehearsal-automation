@@ -98,6 +98,26 @@ pub struct AutomationConfig {
     /// Per-stage score regions for cropped OCR (3 stages)
     #[serde(default = "default_score_regions")]
     pub score_regions: [RelativeRect; 3],
+    /// Per-stage stage-total regions (the big isolated number used as the
+    /// reconstruction checksum input). One per stage.
+    #[serde(default = "default_total_regions")]
+    pub total_regions: [RelativeRect; 3],
+    /// Per-stage bonus-badge regions (light-blue "+NNN" crown badge, used only
+    /// as an optional cross-check). Spans all three character columns since the
+    /// badge sits under whichever column has the largest score.
+    #[serde(default = "default_bonus_regions")]
+    pub bonus_regions: [RelativeRect; 3],
+    /// Brightness threshold for binarizing the stage-total crop (white text).
+    #[serde(default = "default_total_threshold")]
+    pub total_threshold: u8,
+    /// Minimum blue channel for the bonus blue-selective mask. 190 (not 150)
+    /// because the dimmer blue in character portraits leaks digits at 150.
+    #[serde(default = "default_bonus_blue_min")]
+    pub bonus_blue_min: u8,
+    /// Minimum (blue - red) margin for the bonus blue-selective mask; drops the
+    /// gold crown icon while keeping the light-blue digits.
+    #[serde(default = "default_bonus_br_margin")]
+    pub bonus_br_margin: u8,
     /// Number of consecutive histogram matches required to confirm detection (default 3)
     #[serde(default = "default_detection_confirm_count")]
     pub detection_confirm_count: u32,
@@ -117,8 +137,40 @@ fn default_score_regions() -> [RelativeRect; 3] {
     ]
 }
 
+fn default_total_regions() -> [RelativeRect; 3] {
+    [
+        RelativeRect { x: 0.29, y: 0.137, width: 0.4, height: 0.035 },  // Stage 1
+        RelativeRect { x: 0.29, y: 0.388, width: 0.4, height: 0.035 },  // Stage 2
+        RelativeRect { x: 0.29, y: 0.641, width: 0.4, height: 0.035 },  // Stage 3
+    ]
+}
+
+fn default_bonus_regions() -> [RelativeRect; 3] {
+    [
+        RelativeRect { x: 0.28, y: 0.201, width: 0.45, height: 0.022 },  // Stage 1
+        RelativeRect { x: 0.28, y: 0.452, width: 0.45, height: 0.022 },  // Stage 2
+        RelativeRect { x: 0.28, y: 0.706, width: 0.45, height: 0.022 },  // Stage 3
+    ]
+}
+
 fn default_ocr_threshold() -> u8 {
     190
+}
+
+fn default_total_threshold() -> u8 {
+    // 210, not 190: the leading "3" of a 3,XXX,XXX total is misread as "5" at
+    // 190 (samples 005/102842); the crisper strokes at 210 disambiguate it.
+    // A faint "Pt" suffix can leak a trailing digit at some thresholds, but the
+    // >7-digit guard in recognize_single_number rejects that (→ None).
+    210
+}
+
+fn default_bonus_blue_min() -> u8 {
+    190
+}
+
+fn default_bonus_br_margin() -> u8 {
+    30
 }
 
 fn default_histogram_threshold() -> f32 {
@@ -201,6 +253,11 @@ impl Default for AutomationConfig {
             test_click_position: ButtonConfig { x: 0.5, y: 0.5 },
             ocr_threshold: default_ocr_threshold(),
             score_regions: default_score_regions(),
+            total_regions: default_total_regions(),
+            bonus_regions: default_bonus_regions(),
+            total_threshold: default_total_threshold(),
+            bonus_blue_min: default_bonus_blue_min(),
+            bonus_br_margin: default_bonus_br_margin(),
             detection_confirm_count: default_detection_confirm_count(),
             max_click_retries: default_max_click_retries(),
             developer_mode: false,

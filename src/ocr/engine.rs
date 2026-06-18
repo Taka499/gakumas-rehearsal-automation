@@ -246,6 +246,154 @@ pub fn recognize_image_line(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> Result<Vec<
     parse_tsv_output(&tsv_content)
 }
 
+/// OCRs a pre-binarized crop as a single isolated integer.
+///
+/// Distinct from `recognize_image_line`: uses page-segmentation mode 7 ("a
+/// single text line") and a character whitelist, suited to the isolated stage
+/// total and bonus badge (which never overlap anything).
+///
+/// `whitelist` is passed to Tesseract's `tessedit_char_whitelist` ("0123456789,"
+/// for the total, "0123456789+" for the bonus). When `anchor_plus` is true, only
+/// the digits after the **last** "+" are taken — the bonus badge always renders
+/// a "+" immediately before its number, so whatever the crown icon reads as
+/// lands before that "+". Otherwise the longest run of digits/commas is used.
+///
+/// Returns `Ok(None)` when nothing parseable is found, or when the value has an
+/// obviously-wrong digit count for its kind (> 7 digits for a total, > 6 for a
+/// bonus) — a cheap over-detection guard so the worst garbage never reaches the
+/// checksum. A failed total/bonus simply disables the checksum tier downstream
+/// rather than crashing.
+pub fn recognize_single_number(
+    img: &ImageBuffer<Luma<u8>, Vec<u8>>,
+    whitelist: &str,
+    anchor_plus: bool,
+) -> Result<Option<u32>> {
+    let tesseract_exe = find_tesseract_executable()?;
+    let tessdata_dir = find_tessdata_dir()?;
+
+    let temp_input = NamedTempFile::with_suffix(".png")?;
+    img.save(temp_input.path())?;
+
+    let temp_dir = std::env::temp_dir();
+    let output_base = temp_dir
+        .join(format!("tesseract_num_{}", std::process::id()))
+        .to_string_lossy()
+        .to_string();
+
+    let mut cmd = Command::new(&tesseract_exe);
+    cmd.arg(temp_input.path())
+        .arg(&output_base)
+        .arg("--tessdata-dir")
+        .arg(&tessdata_dir)
+        .arg("-l")
+        .arg("eng")
+        .arg("--psm")
+        .arg("7") // Single text line
+        .arg("-c")
+        .arg(format!("tessedit_char_whitelist={}", whitelist))
+        .arg("-c")
+        .arg("tessedit_create_tsv=1");
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd.output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.is_empty() {
+        crate::log(&format!("Tesseract stderr: {}", stderr.trim()));
+    }
+
+    if !output.status.success() {
+        return Err(anyhow!("Tesseract failed with exit code {:?}: {}", output.status.code(), stderr));
+    }
+
+    let tsv_path = format!("{}.tsv", output_base);
+    let tsv_content = match std::fs::read_to_string(&tsv_path) {
+        Ok(content) => content,
+        Err(e) => {
+            crate::log(&format!("Expected TSV path: {}", tsv_path));
+            return Err(anyhow!("Failed to read Tesseract output at {}: {}", tsv_path, e));
+        }
+    };
+
+    let _ = std::fs::remove_file(&tsv_path);
+
+    let lines = parse_tsv_output(&tsv_content)?;
+    let raw: String = lines
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    Ok(parse_single_number(&raw, anchor_plus))
+}
+
+/// Extracts a single integer from raw OCR text for `recognize_single_number`.
+///
+/// Pure helper (unit-testable without Tesseract). See `recognize_single_number`
+/// for the `anchor_plus` semantics and the digit-count over-detection guard.
+fn parse_single_number(raw: &str, anchor_plus: bool) -> Option<u32> {
+    // For the bonus, keep only what follows the last "+" (crown noise lands
+    // before it). If no "+" was read, fall back to the whole text.
+    let segment: &str = if anchor_plus {
+        match raw.rfind('+') {
+            Some(idx) => &raw[idx + 1..],
+            None => raw,
+        }
+    } else {
+        raw
+    };
+
+    // Take the longest contiguous run of digits (commas/periods inside a number
+    // do not break the run but are not kept), so a stray noise group can't be
+    // glued onto the real number.
+    let mut digits = longest_digit_run(segment);
+    if digits.is_empty() {
+        return None;
+    }
+
+    // The stage total renders "X,XXX,XXXPt"; the faint "Pt" suffix can OCR as a
+    // spurious trailing digit (e.g. "3,122,1936" for 3,122,193). At the tuned
+    // total_threshold the real digits are correct and the leak is always at the
+    // END, so an 8-digit total is recovered as its first 7 digits rather than
+    // discarded. The exact-checksum step in reconcile_stage is the backstop if
+    // this guess is ever wrong. The bonus (anchor_plus) has no such suffix.
+    let max_digits = if anchor_plus { 6 } else { 7 };
+    if !anchor_plus && digits.len() == max_digits + 1 {
+        digits.truncate(max_digits);
+    }
+    if digits.len() > max_digits {
+        return None;
+    }
+
+    digits.parse::<u32>().ok()
+}
+
+/// Returns the longest run of digits in `s`, treating `,`/`.` as in-number
+/// separators that neither extend nor break a run (they are simply skipped).
+fn longest_digit_run(s: &str) -> String {
+    let mut best = String::new();
+    let mut cur = String::new();
+    for c in s.chars() {
+        if c.is_ascii_digit() {
+            cur.push(c);
+        } else if c == ',' || c == '.' {
+            // Thousands separator inside a number: don't break the run.
+        } else {
+            if cur.len() > best.len() {
+                best = std::mem::take(&mut cur);
+            } else {
+                cur.clear();
+            }
+        }
+    }
+    if cur.len() > best.len() {
+        best = cur;
+    }
+    best
+}
+
 /// Simple OCR that just returns raw text (for debugging)
 pub fn recognize_image_simple(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> Result<String> {
     let tesseract_exe = find_tesseract_executable()?;
@@ -278,4 +426,51 @@ pub fn recognize_image_simple(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> Result<St
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{longest_digit_run, parse_single_number};
+
+    #[test]
+    fn test_total_parsing() {
+        // Clean total with commas.
+        assert_eq!(parse_single_number("2,744,700", false), Some(2744700));
+        // Trailing unit text stripped (whitelist would normally remove it, but
+        // be robust anyway).
+        assert_eq!(parse_single_number("3,322,171 Pt", false), Some(3322171));
+        // 8-digit total = correct 7 digits + a trailing "Pt"-leak digit; recover
+        // the first 7 (real cases: "3,122,1936" -> 3122193, "3,322,1716").
+        assert_eq!(parse_single_number("31221936", false), Some(3122193));
+        assert_eq!(parse_single_number("3,322,1716", false), Some(3322171));
+        // 9+ digits is genuine garbage → rejected.
+        assert_eq!(parse_single_number("332217106", false), None);
+    }
+
+    #[test]
+    fn test_bonus_parsing_anchor_plus() {
+        // Crown noise lands before the "+"; take the digits after it.
+        assert_eq!(parse_single_number("5+81571", true), Some(81571));
+        assert_eq!(parse_single_number("+265506", true), Some(265506));
+        // Multiple "+" → digits after the LAST one.
+        assert_eq!(parse_single_number("4+2+265506", true), Some(265506));
+        // Over-detected 8-digit bonus (the 102842 blue-min-150 failure) → rejected.
+        assert_eq!(parse_single_number("+23545335", true), None);
+        // No "+" anchor: fall back to the whole text.
+        assert_eq!(parse_single_number("234533", true), Some(234533));
+    }
+
+    #[test]
+    fn test_parse_single_number_empty() {
+        assert_eq!(parse_single_number("", false), None);
+        assert_eq!(parse_single_number("Pt", false), None);
+        assert_eq!(parse_single_number("+", true), None);
+    }
+
+    #[test]
+    fn test_longest_digit_run() {
+        assert_eq!(longest_digit_run("2,744,700"), "2744700");
+        assert_eq!(longest_digit_run("12 345678"), "345678");
+        assert_eq!(longest_digit_run("abc"), "");
+    }
 }

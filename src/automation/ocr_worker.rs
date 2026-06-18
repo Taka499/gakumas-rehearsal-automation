@@ -9,7 +9,18 @@ use std::sync::mpsc::Receiver;
 use crate::automation::config::RelativeRect;
 use crate::automation::csv_writer::{append_to_csv, append_to_raw_csv};
 use crate::automation::queue::OcrWorkItem;
-use crate::ocr::ocr_screenshot;
+use crate::ocr::{ocr_screenshot, Recovery};
+
+/// Worst recovery outcome across the three stages (Flagged > Repaired > Ok).
+fn worst_recovery(flags: &[Recovery; 3]) -> Recovery {
+    if flags.contains(&Recovery::Flagged) {
+        Recovery::Flagged
+    } else if flags.contains(&Recovery::Repaired) {
+        Recovery::Repaired
+    } else {
+        Recovery::Ok
+    }
+}
 
 /// Runs the OCR worker loop.
 ///
@@ -21,8 +32,9 @@ use crate::ocr::ocr_screenshot;
 pub fn run_ocr_worker(
     receiver: Receiver<OcrWorkItem>,
     csv_path: PathBuf,
-    ocr_threshold: u8,
     score_regions: [RelativeRect; 3],
+    total_regions: [RelativeRect; 3],
+    bonus_regions: [RelativeRect; 3],
 ) {
     crate::log("OCR worker started");
 
@@ -49,8 +61,8 @@ pub fn run_ocr_worker(
                 };
 
                 // Run OCR
-                let scores = match ocr_screenshot(&img, ocr_threshold, &score_regions) {
-                    Ok(scores) => scores,
+                let readout = match ocr_screenshot(&img, &score_regions, &total_regions, &bonus_regions) {
+                    Ok(readout) => readout,
                     Err(e) => {
                         crate::log(&format!(
                             "OCR worker: OCR failed for iteration {}: {}",
@@ -59,6 +71,7 @@ pub fn run_ocr_worker(
                         continue; // Skip this item, continue with next
                     }
                 };
+                let scores = readout.scores;
 
                 // Log the extracted scores
                 crate::log(&format!(
@@ -66,8 +79,30 @@ pub fn run_ocr_worker(
                     work_item.iteration, scores[0], scores[1], scores[2]
                 ));
 
+                // Overlap-reconstruction outcome (worst of the three stages).
+                let recovery = worst_recovery(&readout.flags);
+                let recovery_str = match recovery {
+                    Recovery::Ok => "ok",
+                    Recovery::Repaired => "repaired",
+                    Recovery::Flagged => "flagged",
+                };
+                match recovery {
+                    Recovery::Flagged => crate::log(&format!(
+                        "OCR worker: iteration {} FLAGGED for review — {} (scores={:?}, flags={:?})",
+                        work_item.iteration,
+                        crate::paths::relative_display(&work_item.screenshot_path),
+                        scores,
+                        readout.flags
+                    )),
+                    Recovery::Repaired => crate::log(&format!(
+                        "OCR worker: iteration {} scores repaired (flags={:?})",
+                        work_item.iteration, readout.flags
+                    )),
+                    Recovery::Ok => {}
+                }
+
                 // Append to CSV
-                if let Err(e) = append_to_csv(&csv_path, &work_item, &scores) {
+                if let Err(e) = append_to_csv(&csv_path, &work_item, &scores, recovery_str) {
                     crate::log(&format!(
                         "OCR worker: failed to write CSV for iteration {}: {}",
                         work_item.iteration, e
@@ -118,11 +153,13 @@ mod tests {
             RelativeRect { x: 0.0, y: 0.418, width: 1.0, height: 0.035 },
             RelativeRect { x: 0.0, y: 0.670, width: 1.0, height: 0.035 },
         ];
+        let total_regions = score_regions;
+        let bonus_regions = score_regions;
 
         // Spawn worker
         let csv_path_clone = csv_path.clone();
         let handle = thread::spawn(move || {
-            run_ocr_worker(receiver, csv_path_clone, 190, score_regions);
+            run_ocr_worker(receiver, csv_path_clone, score_regions, total_regions, bonus_regions);
         });
 
         // Drop sender to close channel

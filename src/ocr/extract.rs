@@ -21,17 +21,36 @@ const SCORE_PATTERN: &str =
 /// That gluing happens reliably when a per-character score reaches 7 digits
 /// (>= 1,000,000): the wider number leaves almost no gap to its left neighbor,
 /// so Tesseract's layout analysis emits one token, e.g. "576,8801,193,622" for
-/// "576,880" + "1,193,622". The old per-word path then matched that 13-digit
-/// blob, stripped the separators, and overflowed `u32` in `parse_score` —
-/// failing the entire stage. The structural `\d{1,3}(,\d{3})*` grouping splits
-/// the blob back apart at the thousands marks: after "576,880" the next char
-/// "1" cannot extend the group (no separator), so a new token begins.
+/// "576,880" + "1,193,622". An older greedy grouping `\d{1,3}(,\d{3})*` swallowed
+/// an unbounded run of comma groups, so when TWO adjacent >= 1,000,000 scores
+/// collided the whole run could match as one 13-digit token (e.g. sample 003's
+/// "1,327,534,151,661"), stripping the separators and overflowing `u32` in
+/// `parse_score` — failing the entire stage.
+///
+/// The pattern is therefore capped to a single legal score shape per match.
+/// A legal score token is exactly one of:
+/// - a millions score `X,XXX,XXX` — a single leading digit, then two comma
+///   groups. The leading digit is `[1-9]`, not just "1": scores can now exceed
+///   2,000,000 (a `2,XXX,XXX` would otherwise be mis-split into `2,XXX` + `XXX`);
+/// - a sub-million score `XXX,XXX` (one optional comma group; also matches a
+///   bare `\d{1,3}`);
+/// - a run of dash characters (a missing/blank character slot).
+///
+/// `find_iter` scans left to right, trying the alternatives in order and taking
+/// the leftmost match at each position. On "1,327,534,151,661" the first
+/// alternative matches "1,327,534", then scanning resumes, skips the comma, and
+/// the sub-million alternative matches "151,661". On "912,1271,171,0241,004,816"
+/// the millions alternative cannot match at "912" (three digits before the first
+/// comma, not one), so the sub-million alternative matches "912,127"; then
+/// "1,171,024" and "1,004,816" match the millions alternative. Over-long runs
+/// split and the previously-correct readings are unchanged. Because every token
+/// now has at most seven digits, `parse_score` can never overflow `u32`.
 ///
 /// This assumes scores are rendered with thousand separators, which the game
 /// always does. A genuinely comma-less number (not observed in practice) would
 /// be over-split into 3-digit chunks.
 const SCORE_TOKEN_PATTERN: &str =
-    r"\d{1,3}(?:[,.]\d{3})*|[\-\u{2014}\u{2013}\u{2015}\u{2500}\u{30FC}\u{4E00}]+";
+    r"[1-9][,.]\d{3}[,.]\d{3}|\d{1,3}(?:[,.]\d{3})?|[\-\u{2014}\u{2013}\u{2015}\u{2500}\u{30FC}\u{4E00}]+";
 
 /// Minimum confidence threshold for accepting OCR lines
 const MIN_CONFIDENCE: f32 = 60.0;
@@ -407,6 +426,66 @@ mod tests {
         let lines = vec![make_line(&["283,3991,018,192", "319,495"], 90.0)];
         let result = extract_single_stage(&lines).unwrap();
         assert_eq!(result, [283399, 1018192, 319495]);
+    }
+
+    // --- Overlap re-split (M1) tests on the four real OCR line strings. ---
+    //
+    // These assert the *raw split* values that the capped SCORE_TOKEN_PATTERN
+    // produces. They are the inputs to `reconcile_stage` (M3), which later
+    // corrects the units-digit and lost-leading-1 corruptions. The crucial
+    // property proven here is that the two ">= 1,000,000 collision" lines no
+    // longer overflow `u32` (Mode B crash) — `extract_single_stage` returns Ok.
+
+    /// Build a single-line stage from one raw OCR token string (as Tesseract
+    /// emits it for an overlapped row: one glued blob, no internal spaces).
+    fn make_raw_line(text: &str) -> Vec<OcrLine> {
+        vec![OcrLine {
+            text: text.to_string(),
+            words: vec![OcrWord { text: text.to_string(), confidence: 90.0 }],
+            confidence: 90.0,
+        }]
+    }
+
+    #[test]
+    fn test_overlap_split_sample_003() {
+        // Mode B overflow pre-M1; third slot is a dash. True: 1,327,533 / 1,151,661 / 0.
+        let lines = make_raw_line("1,327,534,151,661");
+        let result = extract_single_stage(&lines).expect("must not overflow u32");
+        assert_eq!(result, [1327534, 151661, 0]);
+    }
+
+    #[test]
+    fn test_overlap_split_sample_005() {
+        // Mode B overflow pre-M1; leading-zero-group victim (062,741 -> 62741).
+        let lines = make_raw_line("1,083,344,062,741");
+        let result = extract_single_stage(&lines).expect("must not overflow u32");
+        assert_eq!(result, [1083344, 62741, 0]);
+    }
+
+    #[test]
+    fn test_overlap_split_sample_102842() {
+        // One malignant junction; all three >= 1M. OCR line has a doubled comma.
+        let lines = make_raw_line("1,172,669,,161,1961,093,518");
+        let result = extract_single_stage(&lines).unwrap();
+        assert_eq!(result, [1172669, 161196, 1093518]);
+    }
+
+    #[test]
+    fn test_clean_two_million_score_not_mis_split() {
+        // A clean >= 2,000,000 score (no overlap) must tokenize as one number,
+        // not split into "2,134" + "567" (the old leading-"1"-only pattern did).
+        let lines = make_raw_line("2,134,567 1,500,000 ー");
+        let result = extract_single_stage(&lines).unwrap();
+        assert_eq!(result, [2134567, 1500000, 0]);
+    }
+
+    #[test]
+    fn test_overlap_split_sample_102623_regression() {
+        // Regression guard: this sample already tokenizes correctly today and
+        // must be left unchanged by the capped pattern.
+        let lines = make_raw_line("912,1271,171,0241,004,816");
+        let result = extract_single_stage(&lines).unwrap();
+        assert_eq!(result, [912127, 1171024, 1004816]);
     }
 
     #[test]

@@ -593,12 +593,13 @@ fn test_ocr() {
     let config = automation::get_config();
     let threshold = config.ocr_threshold;
 
-    match ocr::ocr_screenshot(&img, threshold, &config.score_regions) {
-        Ok(scores) => {
+    match ocr::ocr_screenshot(&img, &config.score_regions, &config.total_regions, &config.bonus_regions) {
+        Ok(readout) => {
+            let scores = readout.scores;
             log("OCR succeeded!");
-            log(&format!("Stage 1: {:?}", scores[0]));
-            log(&format!("Stage 2: {:?}", scores[1]));
-            log(&format!("Stage 3: {:?}", scores[2]));
+            log(&format!("Stage 1: {:?} (total={:?}, bonus={:?})", scores[0], readout.totals[0], readout.bonuses[0]));
+            log(&format!("Stage 2: {:?} (total={:?}, bonus={:?})", scores[1], readout.totals[1], readout.bonuses[1]));
+            log(&format!("Stage 3: {:?} (total={:?}, bonus={:?})", scores[2], readout.totals[2], readout.bonuses[2]));
 
             // Calculate totals
             let total: u32 = scores.iter().flat_map(|s| s.iter()).sum();

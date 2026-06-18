@@ -10,8 +10,15 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
 /// CSV header row.
-/// Columns: iteration, timestamp, screenshot, then 9 scores (3 stages × 3 criteria each)
-const CSV_HEADER: &str = "iteration,timestamp,screenshot,s1c1,s1c2,s1c3,s2c1,s2c2,s2c3,s3c1,s3c2,s3c3";
+/// Columns: iteration, timestamp, screenshot, then 9 scores (3 stages × 3
+/// criteria each), then a `recovery` flag (`ok`/`repaired`/`flagged`, the worst
+/// of the three stages' overlap-reconstruction outcomes).
+///
+/// `recovery` is the 13th column, appended after the original 12. Readers index
+/// the first 12 by position (see `analysis::csv_reader`), so older `results.csv`
+/// files that lack it remain readable; when resuming such a file the header is
+/// preserved (it simply won't name the trailing column).
+const CSV_HEADER: &str = "iteration,timestamp,screenshot,s1c1,s1c2,s1c3,s2c1,s2c2,s2c3,s3c1,s3c2,s3c3,recovery";
 
 /// Initializes CSV file with header if it doesn't exist or is empty.
 ///
@@ -65,16 +72,24 @@ pub fn append_to_raw_csv(path: &Path, scores: &[[u32; 3]; 3]) -> Result<()> {
 ///
 /// Opens the file in append mode for each write, ensuring crash safety.
 /// If OCR fails partway through automation, completed results are already saved.
-pub fn append_to_csv(path: &Path, work_item: &OcrWorkItem, scores: &[[u32; 3]; 3]) -> Result<()> {
+///
+/// `recovery` is the overlap-reconstruction outcome for this row
+/// (`ok`/`repaired`/`flagged`), written as the trailing column.
+pub fn append_to_csv(
+    path: &Path,
+    work_item: &OcrWorkItem,
+    scores: &[[u32; 3]; 3],
+    recovery: &str,
+) -> Result<()> {
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .context("Failed to open CSV for append")?;
 
-    // Format: iteration,timestamp,screenshot,s1c1,s1c2,s1c3,s2c1,s2c2,s2c3,s3c1,s3c2,s3c3
+    // Format: iteration,timestamp,screenshot,s1c1..s3c3,recovery
     let line = format!(
-        "{},{},{},{},{},{},{},{},{},{},{},{}",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{}",
         work_item.iteration,
         work_item.captured_at.format("%Y-%m-%dT%H:%M:%S"),
         work_item.screenshot_path.display(),
@@ -87,6 +102,7 @@ pub fn append_to_csv(path: &Path, work_item: &OcrWorkItem, scores: &[[u32; 3]; 3
         scores[2][0],
         scores[2][1],
         scores[2][2],
+        recovery,
     );
 
     writeln!(file, "{}", line).context("Failed to write CSV row")?;
@@ -134,7 +150,7 @@ mod tests {
         let work_item = OcrWorkItem::new(PathBuf::from("screenshots/001.png"), 1);
         let scores = [[100, 200, 300], [400, 500, 600], [700, 800, 900]];
 
-        append_to_csv(&csv_path, &work_item, &scores).unwrap();
+        append_to_csv(&csv_path, &work_item, &scores, "ok").unwrap();
 
         let content = std::fs::read_to_string(&csv_path).unwrap();
         let lines: Vec<&str> = content.lines().collect();
@@ -142,6 +158,7 @@ mod tests {
         assert_eq!(lines.len(), 2); // header + 1 data row
         assert!(lines[1].contains("screenshots/001.png"));
         assert!(lines[1].contains("100,200,300,400,500,600,700,800,900"));
+        assert!(lines[1].ends_with(",ok"));
     }
 
     #[test]
@@ -154,7 +171,7 @@ mod tests {
         for i in 1..=3 {
             let work_item = OcrWorkItem::new(PathBuf::from(format!("screenshots/{:03}.png", i)), i);
             let scores = [[i * 100, i * 100, i * 100]; 3];
-            append_to_csv(&csv_path, &work_item, &scores).unwrap();
+            append_to_csv(&csv_path, &work_item, &scores, "ok").unwrap();
         }
 
         let content = std::fs::read_to_string(&csv_path).unwrap();
