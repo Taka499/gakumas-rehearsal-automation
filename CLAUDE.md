@@ -86,7 +86,7 @@ Key technical details:
 
 - **Admin privileges required**: The executable has a Windows manifest (`gakumas-screenshot.exe.manifest`) that requires administrator elevation. This is necessary for `SendInput` to work with elevated game processes.
 - **No command-line arguments**: This is a system tray application, not a CLI tool. All functionality should be accessed via tray menu, hotkeys, or config file. Do not add command-line argument handling.
-- **Testing limitations**: Unit tests requiring the binary cannot run from `cargo test` due to the admin manifest. Test functionality manually via tray menu or create separate test utilities if needed.
+- **Testing limitations**: The admin manifest normally makes the `cargo test` harness require elevation (os error 740). Build tests with `GAKUMAS_NO_MANIFEST=1 cargo test` to skip embedding the manifest so unit tests run unelevated (the gate is in `build.rs`; normal/release builds still embed it). Pure-logic modules (`ocr::extract`, `ocr::reconcile`, `ocr::engine` parsing, `analysis`, `csv_writer`) are covered this way. Tesseract-dependent end-to-end checks are `#[ignore]`d and run explicitly, e.g. `GAKUMAS_NO_MANIFEST=1 cargo test ocr_overlap_recovery_e2e -- --ignored` (uses the embedded Tesseract + sample PNGs under `temp/`). Anything that drives the live tray app/hotkeys still must be tested manually.
 
 ## Roadmap
 
