@@ -136,17 +136,18 @@ pub fn ocr_screenshot(
 mod e2e_tests {
     //! End-to-end acceptance for the overlap-score recovery (M2/M4).
     //!
-    //! These run the real Tesseract pipeline on the checked-in sample PNGs, so
-    //! they are `#[ignore]`d (Tesseract isn't present in a bare unit-test run,
-    //! and the admin manifest blocks `cargo test` unless built with
-    //! `GAKUMAS_NO_MANIFEST=1`). Run explicitly with:
+    //! These run the real Tesseract pipeline on the checked-in sample PNGs
+    //! (stored via Git LFS under `tests/fixtures/overlap_samples/`), so they are
+    //! `#[ignore]`d (Tesseract isn't present in a bare unit-test run, the admin
+    //! manifest blocks `cargo test` unless built with `GAKUMAS_NO_MANIFEST=1`,
+    //! and the fixtures require `git lfs pull`). Run explicitly with:
     //!
     //!     GAKUMAS_NO_MANIFEST=1 cargo test ocr_overlap_recovery_e2e -- --ignored --nocapture
     use super::*;
     use crate::ocr::reconcile::Recovery;
 
     #[test]
-    #[ignore = "requires embedded Tesseract + sample PNGs; run with --ignored"]
+    #[ignore = "requires embedded Tesseract + LFS fixtures; run with --ignored"]
     fn ocr_overlap_recovery_e2e() {
         crate::automation::config::init_config();
         crate::ocr::ensure_tesseract().expect("extract embedded tesseract");
@@ -154,14 +155,14 @@ mod e2e_tests {
 
         // (path, expected stage-2 scores, expected stage-2 recovery)
         let cases: [(&str, [u32; 3], Recovery); 6] = [
-            ("temp/failed_overlapped_samples/003_20260618_101738.png", [1327533, 1151661, 0], Recovery::Repaired),
-            ("temp/failed_overlapped_samples/005_20260618_101804.png", [1083349, 1062741, 0], Recovery::Repaired),
-            ("temp/failed_overlapped_samples/gakumas_20260618_102842.png", [1172665, 1161196, 1093518], Recovery::Repaired),
-            ("temp/failed_overlapped_samples/gakumas_20260618_102623.png", [912127, 1171024, 1004816], Recovery::Ok),
+            ("tests/fixtures/overlap_samples/003_20260618_101738.png", [1327533, 1151661, 0], Recovery::Repaired),
+            ("tests/fixtures/overlap_samples/005_20260618_101804.png", [1083349, 1062741, 0], Recovery::Repaired),
+            ("tests/fixtures/overlap_samples/gakumas_20260618_102842.png", [1172665, 1161196, 1093518], Recovery::Repaired),
+            ("tests/fixtures/overlap_samples/gakumas_20260618_102623.png", [912127, 1171024, 1004816], Recovery::Ok),
             // Two adjacent collisions (three >= 1M scores): 1,314,245 / 1,206,537 / 1,103,897.
-            ("temp/failed_overlapped_samples/iter009_two_collisions.png", [1314245, 1206537, 1103897], Recovery::Repaired),
+            ("tests/fixtures/overlap_samples/iter009_two_collisions.png", [1314245, 1206537, 1103897], Recovery::Repaired),
             // Single collision; 8-digit total (Pt leak) must recover: 1,240,513 / 1,178,565 / 455,013.
-            ("temp/failed_overlapped_samples/iter018_single_collision.png", [1240513, 1178565, 455013], Recovery::Repaired),
+            ("tests/fixtures/overlap_samples/iter018_single_collision.png", [1240513, 1178565, 455013], Recovery::Repaired),
         ];
 
         let mut failures = Vec::new();
