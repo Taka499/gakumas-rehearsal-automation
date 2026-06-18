@@ -99,8 +99,18 @@ def preprocess(crop, kind, threshold, bmin, margin):
         diff = ImageChops.subtract(b, r)
         m_blue = b.point(lambda v: 255 if v >= bmin else 0)
         m_diff = diff.point(lambda v: 255 if v >= margin else 0)
-        return ImageChops.darker(m_blue, m_diff)
-    return crop.convert("L").point(lambda p: 255 if p >= threshold else 0)
+        # text = blue glyph (white here); invert to black-on-white like Rust.
+        return ImageChops.invert(ImageChops.darker(m_blue, m_diff))
+    # Total: match Rust threshold_bright_pixels EXACTLY — a pixel is text only
+    # when R>t AND G>t AND B>t (all-channels), NOT a luminance average. They
+    # diverge near anti-aliased edges, which once caused the pipeline to read a
+    # total differently from this tool (the 210 calibration was tuned on the
+    # wrong, luminance, binarization). Output black text on white, as Rust feeds
+    # Tesseract.
+    r, g, b = crop.split()[:3]
+    bright = lambda v: 255 if v > threshold else 0
+    allch = ImageChops.darker(ImageChops.darker(r.point(bright), g.point(bright)), b.point(bright))
+    return ImageChops.invert(allch)
 
 
 def ocr(mask, kind):

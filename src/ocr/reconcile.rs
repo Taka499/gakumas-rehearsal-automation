@@ -205,12 +205,190 @@ fn structural_only(
     bonus_ok: Option<u32>,
 ) -> ([u32; 3], Recovery) {
     let bonus_disagrees = bonus_ok.map_or(false, |b| derived_bonus(ocr_scores) != b);
-    let recovery = if total_provided || bonus_disagrees {
+
+    // An overlap only happens between two adjacent >= 1,000,000 scores, so a
+    // stage with a >= 1M slot and at least two non-zero slots is collision-prone.
+    // Without a usable total we cannot verify the sum, and the bonus only pins
+    // the maximum — a million lost from a NON-max slot is invisible to it (this
+    // is exactly how a broken read once slipped through as Ok). Flag such stages
+    // rather than trust them.
+    let nonzero = ocr_scores.iter().filter(|&&s| s > 0).count();
+    let has_million = ocr_scores.iter().any(|&s| s >= 1_000_000);
+    let collision_prone = has_million && nonzero >= 2;
+
+    let recovery = if total_provided || bonus_disagrees || collision_prone {
         Recovery::Flagged
     } else {
         Recovery::Ok
     };
     (ocr_scores, recovery)
+}
+
+/// Reconstructs a stage's scores directly from the score row's raw digit stream
+/// (all commas/spaces removed), guided by the total and bonus checksums.
+///
+/// This is the fallback for when the comma-based `reconcile_stage` cannot recover
+/// — chiefly the **two-collision** case (three adjacent >= 1,000,000 scores),
+/// where the colliding glyphs scramble Tesseract's comma grouping so badly that
+/// the per-number tokenization loses interior digits (e.g. `1,206,537` is split
+/// as `206,53` + `7`). The digits themselves usually survive in order, so this
+/// re-partitions the raw stream into `k` consecutive scores, optionally restoring
+/// a dropped leading "1" on any non-first 6-digit part, searches the units digit
+/// of each junction's left neighbour, and keeps only partitions that satisfy the
+/// exact total checksum (and the bonus, when present). Returns `None` when no
+/// partition satisfies the checksum.
+///
+/// Requires a usable `total`; without it the sum cannot be pinned.
+pub fn reconstruct_from_digits(
+    digits: &str,
+    total: Option<u32>,
+    bonus: Option<u32>,
+) -> Option<([u32; 3], Recovery)> {
+    let total = total?;
+    if !(1..=9_999_999).contains(&total) {
+        return None;
+    }
+    let ds: Vec<u8> = digits.bytes().filter(u8::is_ascii_digit).collect();
+    let n = ds.len();
+    if n == 0 || n > 21 {
+        return None;
+    }
+    let bonus_ok = bonus.filter(|&b| b < 1_000_000 && b < total);
+
+    // (combo, cost) for every partition that satisfies the checksum.
+    let mut solutions: Vec<([u32; 3], u32)> = Vec::new();
+
+    for k in 1..=3usize.min(n) {
+        for comp in compositions(n, k, 1, 7) {
+            // Slice the stream into k parts.
+            let mut parts: [&[u8]; 3] = [&[], &[], &[]];
+            let mut off = 0;
+            for i in 0..k {
+                parts[i] = &ds[off..off + comp[i]];
+                off += comp[i];
+            }
+
+            for mask in 0u32..(1 << k) {
+                let mut restored = [false; 3];
+                let mut base = [0u32; 3];
+                let mut valid = true;
+
+                for i in 0..k {
+                    let r = (mask >> i) & 1 == 1;
+                    if r {
+                        // A restored part lost its leading "1"; only a non-first
+                        // 6-digit part qualifies (1 + 6 digits = a 1,XXX,XXX score).
+                        if i == 0 || comp[i] != 6 {
+                            valid = false;
+                            break;
+                        }
+                        restored[i] = true;
+                    } else if comp[i] == 7 && parts[i][0] != b'1' {
+                        // A 7-digit score must be 1,XXX,XXX (invariant 1).
+                        valid = false;
+                        break;
+                    }
+
+                    let v: u32 = std::str::from_utf8(parts[i]).unwrap().parse().unwrap_or(u32::MAX);
+                    base[i] = if restored[i] { 1_000_000 + v } else { v };
+                    if base[i] >= MAX_SCORE {
+                        valid = false;
+                        break;
+                    }
+                }
+                if !valid {
+                    continue;
+                }
+
+                // Units corruption is confined to the left neighbour of a
+                // restored (malignant-junction) part.
+                let corrupt: Vec<usize> = (0..k).filter(|&i| i + 1 < k && restored[i + 1]).collect();
+                let restores = restored.iter().filter(|&&r| r).count() as u32;
+
+                for a in 0..10usize.pow(corrupt.len() as u32) {
+                    let mut c = base;
+                    let mut x = a;
+                    let mut units_changes = 0u32;
+                    let mut ok = true;
+                    for &slot in &corrupt {
+                        let d = (x % 10) as u32;
+                        x /= 10;
+                        let nv = (base[slot] / 10) * 10 + d;
+                        if nv >= MAX_SCORE {
+                            ok = false;
+                            break;
+                        }
+                        if d != base[slot] % 10 {
+                            units_changes += 1;
+                        }
+                        c[slot] = nv;
+                    }
+                    if !ok {
+                        continue;
+                    }
+
+                    let max = c[0].max(c[1]).max(c[2]);
+                    if c[0] + c[1] + c[2] + max / 5 != total {
+                        continue;
+                    }
+                    if let Some(b) = bonus_ok {
+                        if max / 5 != b {
+                            continue;
+                        }
+                    }
+                    solutions.push((c, restores + units_changes));
+                }
+            }
+        }
+    }
+
+    if solutions.is_empty() {
+        return None;
+    }
+
+    let min_cost = solutions.iter().map(|&(_, c)| c).min().unwrap();
+    let mut at_min: Vec<[u32; 3]> = solutions
+        .iter()
+        .filter(|&&(_, c)| c == min_cost)
+        .map(|&(combo, _)| combo)
+        .collect();
+    at_min.sort_unstable();
+    at_min.dedup();
+
+    let chosen = at_min[0];
+    let recovery = if at_min.len() > 1 {
+        Recovery::Flagged // genuinely ambiguous partition
+    } else if min_cost == 0 {
+        Recovery::Ok
+    } else {
+        Recovery::Repaired
+    };
+    Some((chosen, recovery))
+}
+
+/// All ways to write `n` as `k` ordered parts, each in `[min, max]`.
+fn compositions(n: usize, k: usize, min: usize, max: usize) -> Vec<Vec<usize>> {
+    let mut res = Vec::new();
+    let mut cur = Vec::with_capacity(k);
+    fn rec(n: usize, k: usize, min: usize, max: usize, cur: &mut Vec<usize>, res: &mut Vec<Vec<usize>>) {
+        if k == 0 {
+            if n == 0 {
+                res.push(cur.clone());
+            }
+            return;
+        }
+        for len in min..=max.min(n) {
+            let rem = n - len;
+            if rem < (k - 1) * min || rem > (k - 1) * max {
+                continue;
+            }
+            cur.push(len);
+            rec(rem, k - 1, min, max, cur, res);
+            cur.pop();
+        }
+    }
+    rec(n, k, min, max, &mut cur, &mut res);
+    res
 }
 
 #[cfg(test)]
@@ -329,12 +507,65 @@ mod tests {
     }
 
     #[test]
-    fn test_no_total_clean_read_is_ok() {
-        // No total provided and the bonus corroborates the raw maximum → Ok.
+    fn test_no_total_single_score_is_ok() {
+        // No total, a single non-zero sub-million score (a normal one-character
+        // stage) cannot have an overlap → Ok even without verification.
+        let (scores, rec) = reconcile_stage([450190, 0, 0], None, Some(90038));
+        assert_eq!(scores, [450190, 0, 0]);
+        assert_eq!(rec, Recovery::Ok);
+    }
+
+    #[test]
+    fn test_no_total_collision_prone_flags() {
+        // No total and a >= 1M slot with other non-zero slots: the sum is
+        // unverifiable and the bonus only pins the max, so a million lost from a
+        // non-max slot would be invisible. Flag rather than trust.
         let (scores, rec) =
-            reconcile_stage([912127, 1171024, 1004816], None, Some(234204));
+            reconcile_stage([1240514, 178565, 455013], None, Some(248102));
+        assert_eq!(scores, [1240514, 178565, 455013]);
+        assert_eq!(rec, Recovery::Flagged);
+    }
+
+    // --- Digit-stream reconstruction (two-collision and friends). ---
+
+    #[test]
+    fn test_reconstruct_two_collisions_iter9() {
+        // Three overlapping >= 1M scores; OCR commas scrambled. Raw digit stream
+        // from "1,314,249,,206,53 71,103,897". True: 1,314,245 / 1,206,537 / 1,103,897.
+        let (scores, rec) =
+            reconstruct_from_digits("13142492065371103897", Some(3887528), Some(262849)).unwrap();
+        assert_eq!(scores, [1314245, 1206537, 1103897]);
+        assert_eq!(rec, Recovery::Repaired);
+    }
+
+    #[test]
+    fn test_reconstruct_single_collision_iter18() {
+        // One collision (c1|c2), c3 sub-million. Stream from
+        // "1,240,514,,178,565 455,013". True: 1,240,513 / 1,178,565 / 455,013.
+        let (scores, rec) =
+            reconstruct_from_digits("1240514178565455013", Some(3122193), Some(248102)).unwrap();
+        assert_eq!(scores, [1240513, 1178565, 455013]);
+        assert_eq!(rec, Recovery::Repaired);
+    }
+
+    #[test]
+    fn test_reconstruct_clean_three_million_iter102623() {
+        // Already-correct three-score read confirms via the checksum at cost 0.
+        let (scores, rec) =
+            reconstruct_from_digits("91212711710241004816", Some(3322171), Some(234204)).unwrap();
         assert_eq!(scores, [912127, 1171024, 1004816]);
         assert_eq!(rec, Recovery::Ok);
+    }
+
+    #[test]
+    fn test_reconstruct_requires_total() {
+        assert!(reconstruct_from_digits("13142492065371103897", None, Some(262849)).is_none());
+    }
+
+    #[test]
+    fn test_reconstruct_wrong_total_no_solution() {
+        // A total no partition can satisfy yields None (caller keeps the flag).
+        assert!(reconstruct_from_digits("13142492065371103897", Some(9999999), Some(262849)).is_none());
     }
 
     #[test]

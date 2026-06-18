@@ -348,12 +348,21 @@ fn parse_single_number(raw: &str, anchor_plus: bool) -> Option<u32> {
     // Take the longest contiguous run of digits (commas/periods inside a number
     // do not break the run but are not kept), so a stray noise group can't be
     // glued onto the real number.
-    let digits = longest_digit_run(segment);
+    let mut digits = longest_digit_run(segment);
     if digits.is_empty() {
         return None;
     }
 
+    // The stage total renders "X,XXX,XXXPt"; the faint "Pt" suffix can OCR as a
+    // spurious trailing digit (e.g. "3,122,1936" for 3,122,193). At the tuned
+    // total_threshold the real digits are correct and the leak is always at the
+    // END, so an 8-digit total is recovered as its first 7 digits rather than
+    // discarded. The exact-checksum step in reconcile_stage is the backstop if
+    // this guess is ever wrong. The bonus (anchor_plus) has no such suffix.
     let max_digits = if anchor_plus { 6 } else { 7 };
+    if !anchor_plus && digits.len() == max_digits + 1 {
+        digits.truncate(max_digits);
+    }
     if digits.len() > max_digits {
         return None;
     }
@@ -430,8 +439,12 @@ mod tests {
         // Trailing unit text stripped (whitelist would normally remove it, but
         // be robust anyway).
         assert_eq!(parse_single_number("3,322,171 Pt", false), Some(3322171));
-        // Over-detected 8-digit total → rejected.
-        assert_eq!(parse_single_number("27447007", false), None);
+        // 8-digit total = correct 7 digits + a trailing "Pt"-leak digit; recover
+        // the first 7 (real cases: "3,122,1936" -> 3122193, "3,322,1716").
+        assert_eq!(parse_single_number("31221936", false), Some(3122193));
+        assert_eq!(parse_single_number("3,322,1716", false), Some(3322171));
+        // 9+ digits is genuine garbage → rejected.
+        assert_eq!(parse_single_number("332217106", false), None);
     }
 
     #[test]

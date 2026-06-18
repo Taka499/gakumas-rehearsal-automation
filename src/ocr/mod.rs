@@ -17,7 +17,7 @@ use crate::automation::config::RelativeRect;
 use preprocess::{blue_mask, crop_region};
 use engine::{recognize_image_line, recognize_single_number};
 use extract::extract_single_stage;
-use reconcile::reconcile_stage;
+use reconcile::{reconcile_stage, reconstruct_from_digits};
 
 /// Per-stage OCR readout: the nine per-character scores plus the isolated
 /// stage total and bonus badge that drive checksum reconstruction.
@@ -80,8 +80,34 @@ pub fn ocr_screenshot(
 
         // Reconstruct overlapping-million corruption via the total/bonus checksum.
         let raw = readout.scores[stage_idx];
-        let (reconciled, flag) =
+        let (mut reconciled, mut flag) =
             reconcile_stage(raw, readout.totals[stage_idx], readout.bonuses[stage_idx]);
+
+        // Fallback for cases the comma-based tokenizer can't recover (chiefly two
+        // adjacent collisions, which scramble the comma grouping): reconstruct
+        // straight from the score row's raw digit stream, guided by the checksum.
+        if flag == Recovery::Flagged {
+            let digit_stream: String = lines
+                .iter()
+                .flat_map(|l| l.text.chars())
+                .filter(|c| c.is_ascii_digit())
+                .collect();
+            if let Some((rebuilt, rebuilt_flag)) = reconstruct_from_digits(
+                &digit_stream,
+                readout.totals[stage_idx],
+                readout.bonuses[stage_idx],
+            ) {
+                if rebuilt_flag != Recovery::Flagged {
+                    crate::log(&format!(
+                        "OCR stage {}: digit-stream reconstruction {:?} -> {:?}",
+                        stage_idx + 1, raw, rebuilt
+                    ));
+                    reconciled = rebuilt;
+                    flag = rebuilt_flag;
+                }
+            }
+        }
+
         readout.scores[stage_idx] = reconciled;
         readout.flags[stage_idx] = flag;
 
@@ -127,11 +153,15 @@ mod e2e_tests {
         let config = crate::automation::config::get_config();
 
         // (path, expected stage-2 scores, expected stage-2 recovery)
-        let cases: [(&str, [u32; 3], Recovery); 4] = [
+        let cases: [(&str, [u32; 3], Recovery); 6] = [
             ("temp/failed_overlapped_samples/003_20260618_101738.png", [1327533, 1151661, 0], Recovery::Repaired),
             ("temp/failed_overlapped_samples/005_20260618_101804.png", [1083349, 1062741, 0], Recovery::Repaired),
             ("temp/failed_overlapped_samples/gakumas_20260618_102842.png", [1172665, 1161196, 1093518], Recovery::Repaired),
             ("temp/failed_overlapped_samples/gakumas_20260618_102623.png", [912127, 1171024, 1004816], Recovery::Ok),
+            // Two adjacent collisions (three >= 1M scores): 1,314,245 / 1,206,537 / 1,103,897.
+            ("temp/failed_overlapped_samples/iter009_two_collisions.png", [1314245, 1206537, 1103897], Recovery::Repaired),
+            // Single collision; 8-digit total (Pt leak) must recover: 1,240,513 / 1,178,565 / 455,013.
+            ("temp/failed_overlapped_samples/iter018_single_collision.png", [1240513, 1178565, 455013], Recovery::Repaired),
         ];
 
         let mut failures = Vec::new();
