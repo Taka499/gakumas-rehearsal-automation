@@ -472,7 +472,7 @@ pub fn render_review_window_contents(
                         egui::Grid::new("review_grid")
                             .striped(true)
                             .num_columns(12)
-                            .spacing([6.0, 4.0])
+                            .spacing([4.0, 4.0])
                             .show(ui, |ui| {
                                 ui.label(RichText::new("#").strong());
                                 ui.label(RichText::new("ステージ1").strong());
@@ -497,7 +497,10 @@ pub fn render_review_window_contents(
                                                 egui::TextEdit::singleline(
                                                     &mut review.edits[i][s][c],
                                                 )
-                                                .desired_width(56.0)
+                                                // Wide enough for a 7-digit score
+                                                // (e.g. 1,234,445) plus the field's
+                                                // internal margin, so no cell clips.
+                                                .desired_width(72.0)
                                                 .id_source(("cell", i, s, c)),
                                             );
                                             if resp.changed() {

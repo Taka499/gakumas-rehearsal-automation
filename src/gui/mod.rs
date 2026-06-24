@@ -633,24 +633,34 @@ impl GuiApp {
     }
 
     /// Render the review/edit window (when open) and dispatch its actions.
+    ///
+    /// The review lives in its OWN top-level OS window (an egui *immediate
+    /// viewport*), not a panel floating inside the main window, so it is resized
+    /// independently and is never clipped by the main window's bounds.
     fn render_review_window(&mut self, ctx: &egui::Context) {
         if !self.state.review.as_ref().map_or(false, |r| r.open) {
             return;
         }
         let mut actions = ReviewActions::default();
-        let mut keep_open = true;
-        egui::Window::new("結果の確認・修正")
-            .resizable(true)
-            .default_size([1040.0, 660.0])
-            .min_size([640.0, 360.0])
-            .open(&mut keep_open)
-            .show(ctx, |ui| {
-                let review = self.state.review.as_mut().unwrap();
-                render::render_review_window_contents(ui, review, &mut actions);
-            });
-        if !keep_open {
-            actions.close = true;
-        }
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("ocr_review_viewport"),
+            egui::ViewportBuilder::default()
+                .with_title("結果の確認・修正")
+                .with_inner_size([1200.0, 720.0])
+                .with_min_inner_size([700.0, 420.0])
+                // Match the main viewport: drag-and-drop off to avoid the
+                // RoInitialize (multithreaded COM) conflict noted in run_gui.
+                .with_drag_and_drop(false),
+            |vp_ctx, _class| {
+                egui::CentralPanel::default().show(vp_ctx, |ui| {
+                    let review = self.state.review.as_mut().unwrap();
+                    render::render_review_window_contents(ui, review, &mut actions);
+                });
+                if vp_ctx.input(|i| i.viewport().close_requested()) {
+                    actions.close = true;
+                }
+            },
+        );
         if let Some(iter) = actions.preview_iter {
             self.load_review_preview(ctx, iter);
         }
@@ -834,8 +844,8 @@ pub fn run_gui() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size(Vec2::new(1024.0, 640.0))
-            .with_min_inner_size(Vec2::new(640.0, 460.0))
+            .with_inner_size(Vec2::new(800.0, 580.0))
+            .with_min_inner_size(Vec2::new(600.0, 450.0))
             .with_title("Gakumas Rehearsal Automation")
             // Disable drag-and-drop to avoid COM conflict with RoInitialize (multithreaded)
             .with_drag_and_drop(false),
