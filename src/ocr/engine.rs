@@ -256,7 +256,9 @@ pub fn recognize_image_line(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> Result<Vec<
 /// for the total, "0123456789+" for the bonus). When `anchor_plus` is true, only
 /// the digits after the **last** "+" are taken — the bonus badge always renders
 /// a "+" immediately before its number, so whatever the crown icon reads as
-/// lands before that "+". Otherwise the longest run of digits/commas is used.
+/// lands before that "+". If no "+" survived (the crown/"+" was misread as a
+/// digit), the bonus is rejected to `None` rather than trusted. Otherwise the
+/// longest run of digits/commas is used.
 ///
 /// Returns `Ok(None)` when nothing parseable is found, or when the value has an
 /// obviously-wrong digit count for its kind (> 7 digits for a total, > 6 for a
@@ -335,11 +337,15 @@ pub fn recognize_single_number(
 /// for the `anchor_plus` semantics and the digit-count over-detection guard.
 fn parse_single_number(raw: &str, anchor_plus: bool) -> Option<u32> {
     // For the bonus, keep only what follows the last "+" (crown noise lands
-    // before it). If no "+" was read, fall back to the whole text.
+    // before it). The badge ALWAYS renders a literal "+", so if none survived,
+    // the crown/"+" glyph was misread as a digit (e.g. "+65,575" -> "465575");
+    // the read cannot be trusted, so return None rather than keep the bogus
+    // prepended digit. The bonus is only a checksum cross-check, so discarding
+    // it is safe — it never corrupts a stored score, only disables corroboration.
     let segment: &str = if anchor_plus {
         match raw.rfind('+') {
             Some(idx) => &raw[idx + 1..],
-            None => raw,
+            None => return None,
         }
     } else {
         raw
@@ -456,8 +462,15 @@ mod tests {
         assert_eq!(parse_single_number("4+2+265506", true), Some(265506));
         // Over-detected 8-digit bonus (the 102842 blue-min-150 failure) → rejected.
         assert_eq!(parse_single_number("+23545335", true), None);
-        // No "+" anchor: fall back to the whole text.
-        assert_eq!(parse_single_number("234533", true), Some(234533));
+        // No "+" anchor: the badge always renders a "+", so its absence means the
+        // crown/"+" was misread as a digit (e.g. "+65,575" -> "465575"). Reject
+        // rather than keep the bogus prepended digit.
+        assert_eq!(parse_single_number("465575", true), None);
+        assert_eq!(parse_single_number("234533", true), None);
+        // A correctly-anchored bonus is unchanged.
+        assert_eq!(parse_single_number("+65,575", true), Some(65575));
+        // The change is anchor-only: a total (anchor_plus = false) keeps its value.
+        assert_eq!(parse_single_number("465575", false), Some(465575));
     }
 
     #[test]
