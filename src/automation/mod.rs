@@ -12,6 +12,7 @@ pub mod detection;
 pub mod input;
 pub mod ocr_worker;
 pub mod queue;
+pub mod results_edit;
 pub mod runner;
 pub mod session_meta;
 pub mod state;
