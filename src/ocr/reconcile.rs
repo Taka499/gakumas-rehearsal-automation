@@ -518,6 +518,27 @@ pub fn reconstruct_from_digits(
                         popts[i].push((rv, true));
                     }
                 }
+                // Single-character stage (k == 1): the lone score gained a
+                // spurious leading digit with no overlap neighbour. An 8-digit
+                // part drops its leading digit (e.g. "41110707" -> "1110707");
+                // a 7-digit impossible part replaces its leading "1,"->digit
+                // misread with 1/2. These need no >= 1M left neighbour, so the
+                // physical-validity million-trade guard is skipped when k == 1.
+                if k == 1 && comp[0] == 8 {
+                    let rv: u32 = std::str::from_utf8(&parts[0][1..]).unwrap().parse().unwrap_or(u32::MAX);
+                    if rv >= 1_000_000 && rv < MAX_SCORE {
+                        popts[0].push((rv, true));
+                    }
+                }
+                if k == 1 && comp[0] == 7 && v >= MAX_SCORE {
+                    let tail = v % 1_000_000;
+                    for d in 1..=2u32 {
+                        let rv = d * 1_000_000 + tail;
+                        if rv < MAX_SCORE {
+                            popts[0].push((rv, true));
+                        }
+                    }
+                }
                 if popts[i].is_empty() {
                     comp_valid = false;
                     break;
@@ -546,8 +567,11 @@ pub fn reconstruct_from_digits(
                 }
 
                 // A restored part needs a >= 1M left neighbour (a collision
-                // partner); reject physically-impossible million-trades.
-                if (0..k).any(|i| restored[i] && (i == 0 || base[i - 1] < 1_000_000)) {
+                // partner); reject physically-impossible million-trades. This
+                // overlap rule does not apply to a single-part stage (k == 1):
+                // its repair is a lone-character glyph fix, not a junction, so
+                // skip the guard there.
+                if k > 1 && (0..k).any(|i| restored[i] && (i == 0 || base[i - 1] < 1_000_000)) {
                     continue;
                 }
 
@@ -921,6 +945,17 @@ mod tests {
         let (scores, rec) =
             reconstruct_from_digits("118499711023254644786", Some(3090036), Some(236999)).unwrap();
         assert_eq!(scores, [1184997, 1023254, 644786]);
+        assert_eq!(rec, Recovery::Repaired);
+    }
+
+    #[test]
+    fn test_reconstruct_single_char_split_iter400() {
+        // iter 400: a single character 1,110,707 whose score row OCR'd as two
+        // tokens "41110" "707" — digit stream "41110707" (8 digits, "4" prepended
+        // to "1110707"). Drop the spurious leading digit; checksum + bonus confirm.
+        let (scores, rec) =
+            reconstruct_from_digits("41110707", Some(1332848), Some(222141)).unwrap();
+        assert_eq!(scores, [1110707, 0, 0]);
         assert_eq!(rec, Recovery::Repaired);
     }
 
