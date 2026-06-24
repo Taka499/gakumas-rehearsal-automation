@@ -466,15 +466,24 @@ pub fn render_review_window_contents(
                     .id_source("review_table_scroll")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        // One Grid column PER score (12 total): nesting three
+                        // TextEdits in a single Grid cell makes the Grid clip the
+                        // last one, so each score gets its own column instead.
                         egui::Grid::new("review_grid")
                             .striped(true)
-                            .num_columns(6)
-                            .spacing([10.0, 4.0])
+                            .num_columns(12)
+                            .spacing([6.0, 4.0])
                             .show(ui, |ui| {
                                 ui.label(RichText::new("#").strong());
                                 ui.label(RichText::new("ステージ1").strong());
+                                ui.label("");
+                                ui.label("");
                                 ui.label(RichText::new("ステージ2").strong());
+                                ui.label("");
+                                ui.label("");
                                 ui.label(RichText::new("ステージ3").strong());
+                                ui.label("");
+                                ui.label("");
                                 ui.label(RichText::new("状態").strong());
                                 ui.label("");
                                 ui.end_row();
@@ -483,20 +492,18 @@ pub fn render_review_window_contents(
                                     let iteration = review.rows[i].iteration;
                                     ui.label(iteration.to_string());
                                     for s in 0..3 {
-                                        ui.horizontal(|ui| {
-                                            for c in 0..3 {
-                                                let resp = ui.add(
-                                                    egui::TextEdit::singleline(
-                                                        &mut review.edits[i][s][c],
-                                                    )
-                                                    .desired_width(58.0)
-                                                    .id_source(("cell", i, s, c)),
-                                                );
-                                                if resp.changed() {
-                                                    review.dirty = true;
-                                                }
+                                        for c in 0..3 {
+                                            let resp = ui.add(
+                                                egui::TextEdit::singleline(
+                                                    &mut review.edits[i][s][c],
+                                                )
+                                                .desired_width(56.0)
+                                                .id_source(("cell", i, s, c)),
+                                            );
+                                            if resp.changed() {
+                                                review.dirty = true;
                                             }
-                                        });
+                                        }
                                     }
                                     let rec = review.rows[i].recovery.clone();
                                     ui.label(

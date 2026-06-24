@@ -834,8 +834,8 @@ pub fn run_gui() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size(Vec2::new(800.0, 580.0))
-            .with_min_inner_size(Vec2::new(600.0, 450.0))
+            .with_inner_size(Vec2::new(1024.0, 640.0))
+            .with_min_inner_size(Vec2::new(640.0, 460.0))
             .with_title("Gakumas Rehearsal Automation")
             // Disable drag-and-drop to avoid COM conflict with RoInitialize (multithreaded)
             .with_drag_and_drop(false),
