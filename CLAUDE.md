@@ -30,10 +30,17 @@ Windows screenshot tool that captures the client area of `gakumas.exe` using Win
 Build emits ~30 expected warnings (unused `pub use` re-exports, OCR dead code); these are not regressions. Filter with `cargo check 2>&1 | grep "^error"` to find real failures.
 
 ```powershell
-# Build release (optimized with LTO)
-cargo build --release
+# Build release (optimized with LTO). PREFER the guarded wrapper: a running app
+# instance locks gakumas-screenshot.exe, so a bare `cargo build --release` only
+# fails at the LINK step after a full multi-minute compile ("failed to remove
+# file ... gakumas-screenshot.exe"). build.ps1 checks for a running instance
+# FIRST and aborts in ~1s (pass -Kill to stop it automatically). Always run this
+# guard (or check `Get-Process gakumas-screenshot`) before building.
+powershell -ExecutionPolicy Bypass -File scripts/build.ps1          # cargo build --release
+powershell -ExecutionPolicy Bypass -File scripts/build.ps1 -Kill    # stop a running instance first
+cargo build --release                                                # bare form (only safe if the app is closed)
 
-# Create release package with proper folder structure
+# Create release package with proper folder structure (also guards the running app)
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 
 # Run

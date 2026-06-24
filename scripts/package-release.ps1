@@ -13,6 +13,15 @@ $ErrorActionPreference = "Stop"
 Write-Host "=== Gakumas Screenshot Release Packager ===" -ForegroundColor Cyan
 Write-Host ""
 
+# Guard: a running instance locks the output exe and would fail the build/copy
+# only after a full compile. Abort early with a clear message instead.
+$running = Get-Process gakumas-screenshot -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Host "ERROR: gakumas-screenshot.exe is running (PID $($running.Id))." -ForegroundColor Red
+    Write-Host "Close it (tray -> 終了) before packaging — it locks the binary." -ForegroundColor Red
+    exit 1
+}
+
 # Build release
 Write-Host "Building release binary..." -ForegroundColor Yellow
 cargo build --release
