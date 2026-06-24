@@ -641,7 +641,8 @@ impl GuiApp {
         let mut keep_open = true;
         egui::Window::new("結果の確認・修正")
             .resizable(true)
-            .default_size([920.0, 600.0])
+            .default_size([1040.0, 660.0])
+            .min_size([640.0, 360.0])
             .open(&mut keep_open)
             .show(ctx, |ui| {
                 let review = self.state.review.as_mut().unwrap();

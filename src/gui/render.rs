@@ -438,19 +438,54 @@ pub fn render_review_window_contents(
         })
         .collect();
 
-    ui.columns(2, |cols| {
-        // --- Left: the editable table. ---
-        egui::ScrollArea::vertical()
+    // Right-docked, resizable preview panel; the table fills the remainder. Using
+    // egui panels (not `ui.columns`) makes each region clip its own content, so
+    // the wide score table can never spill over the preview.
+    egui::SidePanel::right("review_preview_panel")
+        .resizable(true)
+        .default_width(300.0)
+        .width_range(180.0..=520.0)
+        .show_inside(ui, |ui| {
+            ui.add_space(2.0);
+            ui.label(RichText::new("画像プレビュー").strong());
+            ui.separator();
+            match &review.preview {
+                Some((iter, tex)) => {
+                    ui.label(format!("{}回目", iter));
+                    ui.add_space(2.0);
+                    let avail_w = (ui.available_width() - 4.0).max(40.0);
+                    let size = tex.size_vec2();
+                    let aspect = if size.x > 0.0 { size.y / size.x } else { 1.0 };
+                    egui::ScrollArea::vertical()
+                        .id_source("review_preview_scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.image((tex.id(), Vec2::new(avail_w, avail_w * aspect)));
+                        });
+                }
+                None => {
+                    ui.label(
+                        RichText::new("📷 を押すと、その行の画像を\nここに表示します")
+                            .color(Color32::from_gray(120)),
+                    );
+                }
+            }
+        });
+
+    egui::CentralPanel::default().show_inside(ui, |ui| {
+        if visible.is_empty() {
+            ui.label("要確認の行はありません（「すべて表示」で全件表示）");
+            return;
+        }
+        // Both-axis scroll so a wide table or a long list never overflows/clips.
+        egui::ScrollArea::both()
             .id_source("review_table_scroll")
             .auto_shrink([false, false])
-            .show(&mut cols[0], |ui| {
-                if visible.is_empty() {
-                    ui.label("要確認の行はありません（「すべて表示」で全件表示）");
-                    return;
-                }
+            .show(ui, |ui| {
                 egui::Grid::new("review_grid")
                     .striped(true)
                     .num_columns(6)
+                    .spacing([10.0, 4.0])
                     .show(ui, |ui| {
                         ui.label(RichText::new("#").strong());
                         ui.label(RichText::new("ステージ1").strong());
@@ -468,7 +503,7 @@ pub fn render_review_window_contents(
                                     for c in 0..3 {
                                         let resp = ui.add(
                                             egui::TextEdit::singleline(&mut review.edits[i][s][c])
-                                                .desired_width(54.0)
+                                                .desired_width(58.0)
                                                 .id_source(("cell", i, s, c)),
                                         );
                                         if resp.changed() {
@@ -486,33 +521,6 @@ pub fn render_review_window_contents(
                         }
                     });
             });
-
-        // --- Right: the screenshot preview pane. ---
-        let pane = &mut cols[1];
-        pane.label(RichText::new("画像プレビュー").strong());
-        pane.add_space(4.0);
-        match &review.preview {
-            Some((iter, tex)) => {
-                pane.label(format!("{}回目", iter));
-                pane.add_space(2.0);
-                let avail_w = pane.available_width() - 8.0;
-                let size = tex.size_vec2();
-                let aspect = if size.x > 0.0 { size.y / size.x } else { 1.0 };
-                // Cap height so a tall portrait shot stays scrollable, not huge.
-                let w = avail_w.min(360.0);
-                egui::ScrollArea::vertical()
-                    .id_source("review_preview_scroll")
-                    .show(pane, |ui| {
-                        ui.image((tex.id(), Vec2::new(w, w * aspect)));
-                    });
-            }
-            None => {
-                pane.label(
-                    RichText::new("📷 を押すと、その行の画像をここに表示します")
-                        .color(Color32::from_gray(120)),
-                );
-            }
-        }
     });
 }
 
