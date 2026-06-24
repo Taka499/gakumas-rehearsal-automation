@@ -57,7 +57,16 @@ pub fn reconcile_stage(
     let total_provided = total.is_some();
 
     // --- Step 0: validate inputs before trusting them. ---
-    let max_raw = ocr_scores.iter().copied().max().unwrap_or(0);
+    // Use each slot's *plausible magnitude* as the floor: an impossible raw value
+    // (e.g. 4,177,174 from a leading-"1"->"4" misread) is larger than its true,
+    // smaller total and would otherwise reject it. Its plausible magnitude
+    // (1,177,174) is what the total must clear.
+    let max_raw = ocr_scores
+        .iter()
+        .copied()
+        .map(plausible_floor)
+        .max()
+        .unwrap_or(0);
     let total_ok = total.filter(|&t| t <= 9_999_999 && t >= max_raw && t > 0);
     let bonus_ok = bonus.filter(|&b| {
         b < 1_000_000 && total_ok.map_or(true, |t| b < t)
@@ -74,25 +83,35 @@ pub fn reconcile_stage(
         candidates(ocr_scores[2]),
     ];
 
+    // The OCR'd total may carry one spuriously-inserted digit (the thousands
+    // comma read as a digit, e.g. "393,454" -> "3935454"). Try the literal total
+    // plus every one-digit deletion of it; a deletion-derived total carries a
+    // small penalty so the literal always wins a genuine tie.
+    let total_set = total_candidates(total, max_raw);
+
     let mut solutions: Vec<([u32; 3], u32)> = Vec::new(); // (combo, cost)
-    for &a in &cand[0] {
-        for &b in &cand[1] {
-            for &c in &cand[2] {
-                let combo = [a, b, c];
-                if !physically_valid(combo, ocr_scores) {
-                    continue;
-                }
-                let max = a.max(b).max(c);
-                if a + b + c + max / 5 == total {
-                    solutions.push((combo, cost(combo, ocr_scores)));
+    for &(t, penalty) in &total_set {
+        for &a in &cand[0] {
+            for &b in &cand[1] {
+                for &c in &cand[2] {
+                    let combo = [a, b, c];
+                    if !physically_valid(combo, ocr_scores) {
+                        continue;
+                    }
+                    let max = a.max(b).max(c);
+                    if a + b + c + max / 5 == t {
+                        solutions.push((combo, cost(combo, ocr_scores) + penalty));
+                    }
                 }
             }
         }
     }
 
-    // --- Step 5 (zero solutions): the total was subtly wrong; flag. ---
+    // --- Step 5 (zero solutions): the total was subtly wrong, or the stage is a
+    // single character whose total/bonus mis-OCR'd. Resolve via the
+    // non-collision-prone fallback rather than reflexively flagging. ---
     if solutions.is_empty() {
-        return (ocr_scores, Recovery::Flagged);
+        return resolve_without_checksum(ocr_scores, total_set, bonus_ok);
     }
 
     // --- Step 4: pick the minimum-cost combo, using the bonus to break ties. ---
@@ -123,9 +142,12 @@ pub fn reconcile_stage(
     let tie = best.len() > 1;
     let bonus_disagrees = bonus_ok.map_or(false, |b| derived_bonus(chosen) != b);
 
+    // Classify by whether the scores actually changed, not by raw cost: a clean
+    // score confirmed only under a one-digit-deleted total carries a non-zero
+    // selection penalty but was not edited, so it is `Ok`, not `Repaired`.
     let recovery = if tie || bonus_disagrees {
         Recovery::Flagged
-    } else if min_cost == 0 {
+    } else if chosen == ocr_scores {
         Recovery::Ok
     } else {
         Recovery::Repaired
@@ -183,6 +205,18 @@ fn candidates(v: u32) -> Vec<u32> {
             bases.push(restored);
         }
     }
+    // An impossible seven-digit value (>= MAX_SCORE, i.e. leading digit 3..9) is a
+    // leading-"1"->"4" (or similar) glyph misread of a `1,XXX,XXX` / `2,XXX,XXX`
+    // score. This happens even on a lone character with no overlap neighbour: the
+    // "1," pair (leading one followed by the thousands comma) reads as a single
+    // "4". Offer the leading-digit-replacement repairs (1 or 2 + the surviving
+    // six-digit tail); the exact checksum picks the right one. Bases below
+    // MAX_SCORE flow through the units-variant expansion below like any other.
+    if (MAX_SCORE..10_000_000).contains(&v) {
+        let tail = v % 1_000_000;
+        bases.push(1_000_000 + tail);
+        bases.push(2_000_000 + tail);
+    }
 
     let mut out = vec![v];
     for &b in &bases {
@@ -228,8 +262,131 @@ fn cost(chosen: [u32; 3], raw: [u32; 3]) -> u32 {
             let left_of_restored = i + 1 < 3 && restored[i + 1];
             c += if left_of_restored { 1 } else { 3 };
         }
+        // A leading-digit replacement on a >= 1M value (e.g. an impossible
+        // 4,177,174 repaired to 1,177,174) is a real edit; charge it so the
+        // result is reported `Repaired`, not a cost-0 `Ok`.
+        if chosen[i] >= 1_000_000
+            && raw[i] >= 1_000_000
+            && chosen[i] / 1_000_000 != raw[i] / 1_000_000
+        {
+            c += 1;
+        }
     }
     c
+}
+
+/// A raw slot's plausible magnitude. An impossible value (>= MAX_SCORE — a
+/// leading-digit glyph misread like 4,177,174) is treated as its `1,XXX,XXX`
+/// repair so it does not over-bound the total; everything else is itself.
+fn plausible_floor(v: u32) -> u32 {
+    if v < MAX_SCORE {
+        v
+    } else {
+        1_000_000 + v % 1_000_000
+    }
+}
+
+/// Plausible totals to test against the checksum: the literal total (penalty 0)
+/// plus every one-digit deletion of its decimal string (penalty 1, so the literal
+/// wins genuine ties). A deletion models the stage total's thousands comma being
+/// OCR'd as a spurious digit (e.g. "393,454" -> "3935454"). Deletions below
+/// `floor` or outside the valid total range are dropped.
+fn total_candidates(total: u32, floor: u32) -> Vec<(u32, u32)> {
+    let mut out = vec![(total, 0u32)];
+    let s = total.to_string();
+    if s.len() > 1 {
+        let bytes = s.as_bytes();
+        let mut seen = std::collections::BTreeSet::new();
+        for skip in 0..bytes.len() {
+            let mut t = String::with_capacity(bytes.len() - 1);
+            for (j, &b) in bytes.iter().enumerate() {
+                if j != skip {
+                    t.push(b as char);
+                }
+            }
+            if let Ok(v) = t.parse::<u32>() {
+                if v > 0 && v <= 9_999_999 && v >= floor && v != total && seen.insert(v) {
+                    out.push((v, 1));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The unique per-character score `c` with `c + floor(c/5) == total`, if any.
+/// `c + c/5` is monotonic in `c`, so a tiny window around `floor(total*5/6)`
+/// suffices to find or rule it out.
+fn solve_single(total: u32) -> Option<u32> {
+    let approx = (total as u64 * 5 / 6) as u32;
+    for c in approx.saturating_sub(3)..=approx.saturating_add(3) {
+        if c + c / 5 == total {
+            return Some(c);
+        }
+    }
+    None
+}
+
+/// Fallback when the checksum search found no satisfying combination.
+///
+/// For a NON-collision-prone stage (invariant 3 — at most one non-zero score, or
+/// only sub-million scores, so no overlap is possible) a clean score is
+/// trustworthy on its own, so resolve rather than reflexively flag a correct read
+/// whose total/bonus mini-numbers merely mis-OCR'd:
+///   - single-character total-solve recovers a dropped leading digit
+///     (e.g. 55,172 -> 855,172) directly from the (comma-tolerant) total,
+///     corroborated by the bonus when present;
+///   - else accept the raw read as `Ok` when nothing contradicts it (bonus absent,
+///     or bonus corroborates the raw maximum);
+///   - else `Flagged` (the bonus positively disagrees, so there is real evidence
+///     of an error we cannot pin without a good total).
+/// A collision-prone stage keeps the old behaviour (Flagged; the caller's
+/// `reconstruct_from_digits` fallback handles those).
+fn resolve_without_checksum(
+    ocr_scores: [u32; 3],
+    mut total_set: Vec<(u32, u32)>,
+    bonus_ok: Option<u32>,
+) -> ([u32; 3], Recovery) {
+    let nonzero: Vec<usize> = (0..3).filter(|&i| ocr_scores[i] > 0).collect();
+    let has_million = ocr_scores.iter().any(|&s| plausible_floor(s) >= 1_000_000);
+    let collision_prone = has_million && nonzero.len() >= 2;
+    if collision_prone {
+        return (ocr_scores, Recovery::Flagged);
+    }
+
+    // Single-character total-solve: exactly one non-zero slot. Prefer the literal
+    // total (penalty 0) over comma-deletion variants.
+    if nonzero.len() == 1 {
+        let idx = nonzero[0];
+        total_set.sort_by_key(|&(_, p)| p);
+        for (t, _) in &total_set {
+            if let Some(c) = solve_single(*t) {
+                if c < MAX_SCORE && bonus_ok.map_or(true, |b| c / 5 == b) {
+                    let mut out = ocr_scores;
+                    out[idx] = c;
+                    let rec = if c == ocr_scores[idx] {
+                        Recovery::Ok
+                    } else {
+                        Recovery::Repaired
+                    };
+                    return (out, rec);
+                }
+            }
+        }
+    }
+
+    // No total-solve: lean on the bonus to corroborate the raw read.
+    let max_plausible = ocr_scores
+        .iter()
+        .copied()
+        .map(plausible_floor)
+        .max()
+        .unwrap_or(0);
+    match bonus_ok {
+        Some(b) if max_plausible / 5 == b => (ocr_scores, Recovery::Ok),
+        Some(_) => (ocr_scores, Recovery::Flagged),
+        None => (ocr_scores, Recovery::Ok),
+    }
 }
 
 /// Structural-only fallback when no usable total is available (ExecPlan step 6).
@@ -618,6 +775,81 @@ mod tests {
             reconcile_stage([1240514, 178565, 455013], None, Some(248102));
         assert_eq!(scores, [1240514, 178565, 455013]);
         assert_eq!(rec, Recovery::Flagged);
+    }
+
+    // --- Single-character corruption (run 20260623_232320). The score row's lone
+    //     character mis-read; total/bonus drive the recovery. ---
+
+    #[test]
+    fn test_single_char_leading_one_to_four_iter304() {
+        // 1,177,174 read as 4,177,174 (leading "1," glyph misread as "4"); the
+        // total confirms, bonus was unread. Impossible >= 3M raw recovered.
+        let (scores, rec) = reconcile_stage([4177174, 0, 0], Some(1412608), None);
+        assert_eq!(scores, [1177174, 0, 0]);
+        assert_eq!(rec, Recovery::Repaired);
+    }
+
+    #[test]
+    fn test_single_char_leading_one_to_four_with_bonus() {
+        // iters 267/349/363/521 — same mode, bonus present and corroborating.
+        for (raw, total, bonus, want) in [
+            (4172520u32, 1407024u32, 234504u32, 1172520u32),
+            (4117975, 1341570, 223595, 1117975),
+            (4115501, 1338601, 223100, 1115501),
+            (4122517, 1347020, 224503, 1122517),
+        ] {
+            let (scores, rec) = reconcile_stage([raw, 0, 0], Some(total), Some(bonus));
+            assert_eq!(scores, [want, 0, 0], "raw={raw}");
+            assert_eq!(rec, Recovery::Repaired, "raw={raw}");
+        }
+    }
+
+    #[test]
+    fn test_single_char_comma_inserted_total_is_ok_not_flagged() {
+        // iter 3 stage 3: score 327,879 is correct; total "393,454" OCR'd as
+        // "3935454" (comma read as 5). The one-digit-deletion 393454 satisfies the
+        // checksum, so the unchanged score is Ok, not flagged.
+        let (scores, rec) = reconcile_stage([327879, 0, 0], Some(3935454), None);
+        assert_eq!(scores, [327879, 0, 0]);
+        assert_eq!(rec, Recovery::Ok);
+    }
+
+    #[test]
+    fn test_single_char_dropped_leading_digit_recovered() {
+        // iter 472: 55,172 -> 855,172; iter 207: 92,118 -> 892,118. The dropped
+        // leading digit cannot be reconstructed from the score text, but the
+        // single-character total-solve pins it exactly (bonus corroborates).
+        let (s1, r1) = reconcile_stage([55172, 0, 0], Some(1026206), Some(171034));
+        assert_eq!((s1, r1), ([855172, 0, 0], Recovery::Repaired));
+        let (s2, r2) = reconcile_stage([92118, 0, 0], Some(1070541), Some(178423));
+        assert_eq!((s2, r2), ([892118, 0, 0], Recovery::Repaired));
+    }
+
+    #[test]
+    fn test_single_char_transposed_total_bonus_corroborates_ok() {
+        // Score 1,119,377 correct; total transposed to 1,343,525 (true 1,343,252),
+        // which no single-digit deletion fixes. The bonus (floor(1119377/5)=223875)
+        // corroborates the raw read → Ok, not flagged.
+        let (scores, rec) = reconcile_stage([1119377, 0, 0], Some(1343525), Some(223875));
+        assert_eq!(scores, [1119377, 0, 0]);
+        assert_eq!(rec, Recovery::Ok);
+    }
+
+    #[test]
+    fn test_single_char_bonus_contradicts_flags() {
+        // Clean-looking single score but the bonus disagrees and the total is
+        // unusable → genuine evidence of an error we cannot pin → Flagged.
+        let (scores, rec) = reconcile_stage([500000, 0, 0], Some(9999999), Some(123456));
+        assert_eq!(scores, [500000, 0, 0]);
+        assert_eq!(rec, Recovery::Flagged);
+    }
+
+    #[test]
+    fn test_single_char_clean_total_stays_ok() {
+        // Regression: a normal single sub-million score with a matching total is Ok.
+        let (scores, rec) = reconcile_stage([994573, 0, 0], Some(1193487), None);
+        assert_eq!(scores, [994573, 0, 0]);
+        assert_eq!(rec, Recovery::Ok);
     }
 
     // --- Digit-stream reconstruction (two-collision and friends). ---
