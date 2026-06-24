@@ -443,7 +443,7 @@ pub fn render_review_window_contents(
     // clipped to its own area — the wide score table can never spill over the
     // preview (the bug with the old equal `ui.columns` split).
     let avail = ui.available_size();
-    let preview_w = (avail.x * 0.32).clamp(220.0, 380.0);
+    let preview_w = (avail.x * 0.28).clamp(200.0, 320.0);
     let table_w = (avail.x - preview_w - 14.0).max(220.0);
     let h = avail.y.max(120.0);
 
@@ -454,7 +454,10 @@ pub fn render_review_window_contents(
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
                 ui.set_min_size(Vec2::new(table_w, h));
-                ui.set_max_width(table_w);
+                // NOTE: do NOT clamp max width here — that squeezes the score
+                // cells narrower than their digits. The ScrollArea below clips to
+                // this region and adds a horizontal scrollbar when the natural
+                // table is wider, so cells always keep their full width.
                 if visible.is_empty() {
                     ui.label("要確認の行はありません（「すべて表示」で全件表示）");
                     return;
