@@ -4,7 +4,7 @@
 
 use eframe::egui::{self, Color32, RichText, TextureHandle, Vec2};
 
-use super::state::{AutomationStatus, GuiState};
+use super::state::{AutomationStatus, GuiState, ReviewState};
 
 /// One-tap run-count presets shown beneath every run-count input. Edit this
 /// single array to change the buttons everywhere they appear.
@@ -109,6 +109,19 @@ pub struct PanelActions {
     pub dismiss_selected: bool,
     /// Run additional iterations into the most recent session's folder.
     pub extend: bool,
+    /// Open the OCR result review/edit window for the latest session.
+    pub open_review: bool,
+}
+
+/// Signals collected from the review/edit window in one frame.
+#[derive(Default)]
+pub struct ReviewActions {
+    /// 保存 pressed: write the edited rows back to the CSVs.
+    pub save: bool,
+    /// The window was closed (X) — drop the review state's `open` flag.
+    pub close: bool,
+    /// A row's 📷 was clicked: load this iteration's screenshot into the preview.
+    pub preview_iter: Option<u32>,
 }
 
 /// Renders the entire third column as a single state-driven panel: only the
@@ -163,6 +176,14 @@ fn render_idle(ui: &mut egui::Ui, state: &mut GuiState, actions: &mut PanelActio
         ui.add_space(6.0);
         if ui.button("📁 フォルダを開く").clicked() {
             actions.open_folder = true;
+        }
+        ui.add_space(6.0);
+        if ui
+            .button("📝 結果を確認・修正")
+            .on_hover_text("OCR結果を一覧し、画像を見ながら手動で修正できます")
+            .clicked()
+        {
+            actions.open_review = true;
         }
         render_extend_section(ui, &mut state.additional_iterations, actions);
     }
@@ -296,6 +317,16 @@ fn render_finished(
             actions.open_folder = true;
         }
     });
+    ui.add_space(8.0);
+    ui.add_enabled_ui(state.latest_session_path.is_some(), |ui| {
+        if ui
+            .button("📝 結果を確認・修正")
+            .on_hover_text("OCR結果を一覧し、画像を見ながら手動で修正できます")
+            .clicked()
+        {
+            actions.open_review = true;
+        }
+    });
 
     // 追加実行 (extend): only for a finished series that is NOT resumable
     // (Completed, or a non-resumable terminal state) and that has a folder.
@@ -345,6 +376,144 @@ fn render_generated_files(ui: &mut egui::Ui, session_path: &std::path::Path) {
         RichText::new("「フォルダを開く」で結果を確認")
             .color(Color32::from_rgb(0, 120, 200)),
     );
+}
+
+/// Colour for a recovery flag badge.
+fn recovery_color(recovery: &str) -> Color32 {
+    match recovery {
+        "ok" => Color32::from_rgb(0, 150, 0),
+        "repaired" => Color32::from_rgb(0, 120, 200),
+        "manual" => Color32::from_rgb(150, 0, 150),
+        _ => Color32::from_rgb(200, 60, 0), // flagged / unknown
+    }
+}
+
+/// Renders the body of the review/edit window: a filtered, editable table of OCR
+/// results on the left and a screenshot preview pane on the right. Reads and
+/// mutates `review` (the edit buffers, filter, dirty flag) and emits clicks into
+/// `actions` for the caller to dispatch (load preview / save / close).
+pub fn render_review_window_contents(
+    ui: &mut egui::Ui,
+    review: &mut ReviewState,
+    actions: &mut ReviewActions,
+) {
+    let attention = review
+        .rows
+        .iter()
+        .filter(|r| r.recovery == "flagged" || r.recovery == "repaired")
+        .count();
+
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut review.show_all, "すべて表示");
+        ui.label(format!("要確認 {} / 全 {} 件", attention, review.rows.len()));
+        ui.separator();
+        if ui
+            .add_enabled(review.dirty, egui::Button::new(RichText::new("💾 保存").strong()))
+            .clicked()
+        {
+            actions.save = true;
+        }
+        if review.dirty {
+            ui.label(
+                RichText::new("● 未保存の変更")
+                    .color(Color32::from_rgb(200, 120, 0))
+                    .small(),
+            );
+        }
+    });
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new("📷 で画像を表示し、セルを直接編集して「保存」してください")
+            .small()
+            .color(Color32::from_rgb(0, 120, 200)),
+    );
+    ui.separator();
+
+    // Snapshot which rows to show (index list) so the borrow on `review.rows`
+    // during filtering does not collide with the mutable cell editing below.
+    let show_all = review.show_all;
+    let visible: Vec<usize> = (0..review.rows.len())
+        .filter(|&i| {
+            show_all || review.rows[i].recovery == "flagged" || review.rows[i].recovery == "repaired"
+        })
+        .collect();
+
+    ui.columns(2, |cols| {
+        // --- Left: the editable table. ---
+        egui::ScrollArea::vertical()
+            .id_source("review_table_scroll")
+            .auto_shrink([false, false])
+            .show(&mut cols[0], |ui| {
+                if visible.is_empty() {
+                    ui.label("要確認の行はありません（「すべて表示」で全件表示）");
+                    return;
+                }
+                egui::Grid::new("review_grid")
+                    .striped(true)
+                    .num_columns(6)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("#").strong());
+                        ui.label(RichText::new("ステージ1").strong());
+                        ui.label(RichText::new("ステージ2").strong());
+                        ui.label(RichText::new("ステージ3").strong());
+                        ui.label(RichText::new("状態").strong());
+                        ui.label("");
+                        ui.end_row();
+
+                        for &i in &visible {
+                            let iteration = review.rows[i].iteration;
+                            ui.label(iteration.to_string());
+                            for s in 0..3 {
+                                ui.horizontal(|ui| {
+                                    for c in 0..3 {
+                                        let resp = ui.add(
+                                            egui::TextEdit::singleline(&mut review.edits[i][s][c])
+                                                .desired_width(54.0)
+                                                .id_source(("cell", i, s, c)),
+                                        );
+                                        if resp.changed() {
+                                            review.dirty = true;
+                                        }
+                                    }
+                                });
+                            }
+                            let rec = review.rows[i].recovery.clone();
+                            ui.label(RichText::new(&rec).color(recovery_color(&rec)).small());
+                            if ui.button("📷").on_hover_text("この行の画像を表示").clicked() {
+                                actions.preview_iter = Some(iteration);
+                            }
+                            ui.end_row();
+                        }
+                    });
+            });
+
+        // --- Right: the screenshot preview pane. ---
+        let pane = &mut cols[1];
+        pane.label(RichText::new("画像プレビュー").strong());
+        pane.add_space(4.0);
+        match &review.preview {
+            Some((iter, tex)) => {
+                pane.label(format!("{}回目", iter));
+                pane.add_space(2.0);
+                let avail_w = pane.available_width() - 8.0;
+                let size = tex.size_vec2();
+                let aspect = if size.x > 0.0 { size.y / size.x } else { 1.0 };
+                // Cap height so a tall portrait shot stays scrollable, not huge.
+                let w = avail_w.min(360.0);
+                egui::ScrollArea::vertical()
+                    .id_source("review_preview_scroll")
+                    .show(pane, |ui| {
+                        ui.image((tex.id(), Vec2::new(w, w * aspect)));
+                    });
+            }
+            None => {
+                pane.label(
+                    RichText::new("📷 を押すと、その行の画像をここに表示します")
+                        .color(Color32::from_gray(120)),
+                );
+            }
+        }
+    });
 }
 
 /// Idle-only resume picker, collapsed by default so it never feels always-on.

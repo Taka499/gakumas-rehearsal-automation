@@ -19,9 +19,11 @@ use crate::automation::runner::{
     extend_automation, get_last_outcome, is_automation_running, resume_automation, start_automation,
     AutomationOutcome,
 };
+use crate::automation::results_edit::{load_review_rows, save_review_rows, ReviewRow, RECOVERY_MANUAL};
 use crate::automation::state::request_abort;
 
-use state::{AutomationStatus, GuiState};
+use render::ReviewActions;
+use state::{AutomationStatus, GuiState, ReviewState};
 
 /// Menu item IDs for tray menu
 const MENU_SHOW_WINDOW: &str = "show_window";
@@ -500,6 +502,160 @@ impl GuiApp {
         }
     }
 
+    /// Builds the per-row editable text buffers from a row's scores.
+    fn edits_from_rows(rows: &[ReviewRow]) -> Vec<[[String; 3]; 3]> {
+        rows.iter()
+            .map(|r| {
+                let mut e: [[String; 3]; 3] = Default::default();
+                for s in 0..3 {
+                    for c in 0..3 {
+                        e[s][c] = r.scores[s][c].to_string();
+                    }
+                }
+                e
+            })
+            .collect()
+    }
+
+    /// Handle "📝 結果を確認・修正" — load the latest session's results into the
+    /// review/edit window.
+    fn handle_open_review(&mut self) {
+        let path = match &self.state.latest_session_path {
+            Some(p) => p.clone(),
+            None => {
+                crate::log("GUI: 結果を確認 requested but no recent session is known");
+                return;
+            }
+        };
+        match load_review_rows(&path) {
+            Ok(rows) => {
+                let edits = Self::edits_from_rows(&rows);
+                self.state.review = Some(ReviewState {
+                    session_path: path,
+                    rows,
+                    edits,
+                    show_all: false,
+                    dirty: false,
+                    preview: None,
+                    open: true,
+                });
+                crate::log("GUI: Opened OCR result review window");
+            }
+            Err(e) => {
+                crate::log(&format!("GUI: Failed to load results for review: {}", e));
+            }
+        }
+    }
+
+    /// Load one iteration's screenshot into the review preview pane (cached until
+    /// another row is chosen). No-op if it is already the previewed iteration.
+    fn load_review_preview(&mut self, ctx: &egui::Context, iteration: u32) {
+        let review = match self.state.review.as_mut() {
+            Some(r) => r,
+            None => return,
+        };
+        if review.preview.as_ref().map_or(false, |(i, _)| *i == iteration) {
+            return;
+        }
+        let path = match review.rows.iter().find(|r| r.iteration == iteration) {
+            Some(r) => r.screenshot.clone(),
+            None => return,
+        };
+        match image::open(&path) {
+            Ok(img) => {
+                let rgba = img.to_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                let color = egui::ColorImage::from_rgba_unmultiplied(size, &rgba.into_raw());
+                let tex = ctx.load_texture(
+                    format!("review_preview_{}", iteration),
+                    color,
+                    egui::TextureOptions::LINEAR,
+                );
+                review.preview = Some((iteration, tex));
+            }
+            Err(e) => {
+                crate::log(&format!("GUI: Failed to open screenshot {}: {}", path, e));
+                review.preview = None;
+            }
+        }
+    }
+
+    /// Persist the review edits: parse each row's buffers, mark changed rows
+    /// `manual`, rewrite both CSVs, and re-seed the buffers from the saved rows.
+    fn handle_save_review(&mut self) {
+        let review = match self.state.review.as_mut() {
+            Some(r) => r,
+            None => return,
+        };
+        let mut changed = 0u32;
+        for (i, row) in review.rows.iter_mut().enumerate() {
+            let mut new_scores = row.scores;
+            let mut row_changed = false;
+            for s in 0..3 {
+                for c in 0..3 {
+                    match review.edits[i][s][c].trim().parse::<u32>() {
+                        Ok(v) => {
+                            if v != row.scores[s][c] {
+                                new_scores[s][c] = v;
+                                row_changed = true;
+                            }
+                        }
+                        // Non-numeric input: keep the prior value, reset the buffer.
+                        Err(_) => review.edits[i][s][c] = row.scores[s][c].to_string(),
+                    }
+                }
+            }
+            if row_changed {
+                row.scores = new_scores;
+                row.recovery = RECOVERY_MANUAL.to_string();
+                changed += 1;
+            }
+        }
+        match save_review_rows(&review.session_path, &review.rows) {
+            Ok(()) => {
+                review.dirty = false;
+                review.edits = Self::edits_from_rows(&review.rows);
+                crate::log(&format!(
+                    "GUI: Saved review edits ({} row(s) marked manual) to {}",
+                    changed,
+                    review.session_path.display()
+                ));
+            }
+            Err(e) => crate::log(&format!("GUI: Failed to save review edits: {}", e)),
+        }
+    }
+
+    /// Render the review/edit window (when open) and dispatch its actions.
+    fn render_review_window(&mut self, ctx: &egui::Context) {
+        if !self.state.review.as_ref().map_or(false, |r| r.open) {
+            return;
+        }
+        let mut actions = ReviewActions::default();
+        let mut keep_open = true;
+        egui::Window::new("結果の確認・修正")
+            .resizable(true)
+            .default_size([920.0, 600.0])
+            .open(&mut keep_open)
+            .show(ctx, |ui| {
+                let review = self.state.review.as_mut().unwrap();
+                render::render_review_window_contents(ui, review, &mut actions);
+            });
+        if !keep_open {
+            actions.close = true;
+        }
+        if let Some(iter) = actions.preview_iter {
+            self.load_review_preview(ctx, iter);
+        }
+        if actions.save {
+            self.handle_save_review();
+        }
+        if actions.close {
+            if let Some(r) = self.state.review.as_mut() {
+                r.open = false;
+            }
+        }
+    }
+
     /// Handle open folder button click.
     fn handle_open_folder(&self) {
         if let Some(path) = &self.state.latest_session_path {
@@ -572,10 +728,14 @@ impl eframe::App for GuiApp {
                             if actions.back_to_idle { self.handle_back_to_idle(); }
                             if actions.dismiss_selected { self.handle_dismiss_selected(); }
                             if actions.extend { self.handle_extend(); }
+                            if actions.open_review { self.handle_open_review(); }
                         });
                 });
             });
         });
+
+        // Review/edit window (floats over the main panel when open).
+        self.render_review_window(ctx);
     }
 }
 
