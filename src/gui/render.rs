@@ -493,14 +493,17 @@ pub fn render_review_window_contents(
                                     ui.label(iteration.to_string());
                                     for s in 0..3 {
                                         for c in 0..3 {
-                                            let resp = ui.add(
+                                            // `add_sized` allocates an EXACT cell
+                                            // size that the Grid uses for the column
+                                            // width — unlike `desired_width`, whose
+                                            // small reported minimum let empty-header
+                                            // columns collapse and clip the digits.
+                                            // 72px fits a 7-digit score (1,234,445).
+                                            let resp = ui.add_sized(
+                                                [72.0, 20.0],
                                                 egui::TextEdit::singleline(
                                                     &mut review.edits[i][s][c],
                                                 )
-                                                // Wide enough for a 7-digit score
-                                                // (e.g. 1,234,445) plus the field's
-                                                // internal margin, so no cell clips.
-                                                .desired_width(72.0)
                                                 .id_source(("cell", i, s, c)),
                                             );
                                             if resp.changed() {
