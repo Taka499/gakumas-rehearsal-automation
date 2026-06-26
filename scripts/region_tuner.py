@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["pillow"]
-# ///
 """Interactive browser tool to calibrate the OCR regions and the review crop.
 
 Starts a tiny local web server. Open the printed URL, pick a sample
@@ -20,9 +16,10 @@ scores; all three move together because the adjust is shared. A live thumbnail
 under each shows exactly what the review window will render. Copy the
 review_crop_adjust JSON into config.json.
 
-Run from the repo root:
+Dependencies (pillow) are managed by the project's pyproject.toml/uv.lock; uv
+syncs the .venv automatically. Run from the repo root:
 
-    uv run scripts/region_tuner.py
+    uv run python scripts/region_tuner.py
     # then open http://127.0.0.1:8777 in a browser
 
 Nothing leaves your machine; it binds to localhost only.
