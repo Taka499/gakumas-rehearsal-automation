@@ -36,6 +36,65 @@ impl Default for RelativeRect {
     }
 }
 
+/// Adjustment applied on top of each `score_regions[stage]` to produce the
+/// human-review crop shown inline in the review window. All values are window
+/// fractions (0..1). One shared instance covers all three stages because the
+/// icon-above-score relationship is identical per stage. Kept separate from the
+/// OCR crop because OCR wants a tight digits-only band, while review wants the
+/// character portraits above the digits so the user can see who/what they are
+/// correcting. Reusing `score_regions`' x/width single-sources the horizontal
+/// layout, which the game may change in a future update.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct ReviewCropAdjust {
+    /// Extend the crop upward (decreasing y) to include the character portraits
+    /// that sit above the printed scores.
+    pub top_extend: f32,
+    /// Extend the crop downward for breathing room below the digits.
+    pub bottom_extend: f32,
+    /// Trim from the left edge (default 0 so x tracks score_regions).
+    pub left_inset: f32,
+    /// Trim from the right edge (drops the 詳細 button / right margin).
+    pub right_inset: f32,
+}
+
+impl Default for ReviewCropAdjust {
+    fn default() -> Self {
+        // Calibrated against real result screens with scripts/region_tuner.py:
+        // the character portraits + printed scores sit in the centred ~0.56-wide
+        // column and extend below the score band, so the crop trims both sides and
+        // extends downward (a readable ~1.8:1 block) rather than upward.
+        Self {
+            top_extend: 0.05,
+            bottom_extend: 0.1,
+            left_inset: 0.21,
+            right_inset: 0.23,
+        }
+    }
+}
+
+fn default_review_crop_adjust() -> ReviewCropAdjust {
+    ReviewCropAdjust::default()
+}
+
+/// Derive the inline review crop for `stage` (0..=2) from `score_regions[stage]`
+/// and `review_crop_adjust`, clamped into `[0,1]` so the result is always a
+/// valid UV rect (an over-extension never samples outside the image; an inset
+/// wider than the region yields a zero — not negative — dimension).
+pub fn review_crop_rect(config: &AutomationConfig, stage: usize) -> RelativeRect {
+    let s = config.score_regions[stage];
+    let a = config.review_crop_adjust;
+    let x0 = (s.x + a.left_inset).clamp(0.0, 1.0);
+    let y0 = (s.y - a.top_extend).clamp(0.0, 1.0);
+    let x1 = (s.x + s.width - a.right_inset).clamp(0.0, 1.0);
+    let y1 = (s.y + s.height + a.bottom_extend).clamp(0.0, 1.0);
+    RelativeRect {
+        x: x0,
+        y: y0,
+        width: (x1 - x0).max(0.0),
+        height: (y1 - y0).max(0.0),
+    }
+}
+
 /// A point in relative coordinates for button centers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ButtonConfig {
@@ -98,6 +157,10 @@ pub struct AutomationConfig {
     /// Per-stage score regions for cropped OCR (3 stages)
     #[serde(default = "default_score_regions")]
     pub score_regions: [RelativeRect; 3],
+    /// Adjustment producing the inline review crop (character portraits + scores)
+    /// from `score_regions`. Used only by the review window, not by OCR.
+    #[serde(default = "default_review_crop_adjust")]
+    pub review_crop_adjust: ReviewCropAdjust,
     /// Per-stage stage-total regions (the big isolated number used as the
     /// reconstruction checksum input). One per stage.
     #[serde(default = "default_total_regions")]
@@ -253,6 +316,7 @@ impl Default for AutomationConfig {
             test_click_position: ButtonConfig { x: 0.5, y: 0.5 },
             ocr_threshold: default_ocr_threshold(),
             score_regions: default_score_regions(),
+            review_crop_adjust: default_review_crop_adjust(),
             total_regions: default_total_regions(),
             bonus_regions: default_bonus_regions(),
             total_threshold: default_total_threshold(),
@@ -312,4 +376,64 @@ pub fn get_config() -> &'static AutomationConfig {
     CONFIG
         .get()
         .expect("Config not initialized. Call init_config() first.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn in_unit(v: f32) -> bool {
+        (0.0..=1.0).contains(&v)
+    }
+
+    #[test]
+    fn review_crop_default_frames_portrait_column() {
+        let cfg = AutomationConfig::default();
+        let s = cfg.score_regions[0]; // { x:0.0, y:0.179, width:1.0, height:0.022 }
+        let crop = review_crop_rect(&cfg, 0);
+
+        // Calibrated default trims both sides to the centred portrait column...
+        assert!(crop.x > s.x, "crop.x {} should be right of score x {}", crop.x, s.x);
+        assert!(crop.width < s.width, "crop.width {} should be < {}", crop.width, s.width);
+        assert!((crop.width - 0.56).abs() < 1e-5, "crop.width {} ~ 0.56", crop.width);
+        // ...slightly above the digits band and extending below it (portraits sit
+        // under the scores on this screen).
+        assert!(crop.y < s.y, "crop.y {} should be above score y {}", crop.y, s.y);
+        assert!(crop.y + crop.height > s.y + s.height, "crop should extend below the score band");
+        // Valid UV rect inside the image.
+        assert!(in_unit(crop.x) && in_unit(crop.y));
+        assert!(in_unit(crop.x + crop.width) && in_unit(crop.y + crop.height));
+        assert!(crop.width > 0.0 && crop.height > 0.0);
+    }
+
+    #[test]
+    fn review_crop_clamps_overextension_to_zero() {
+        let mut cfg = AutomationConfig::default();
+        // stage 0 y = 0.179; a huge top_extend must clamp y to 0, never negative.
+        cfg.review_crop_adjust = ReviewCropAdjust {
+            top_extend: 0.5,
+            bottom_extend: 0.0,
+            left_inset: 0.0,
+            right_inset: 0.22,
+        };
+        let crop = review_crop_rect(&cfg, 0);
+        assert_eq!(crop.y, 0.0);
+        assert!(crop.height > 0.0);
+        assert!(in_unit(crop.y + crop.height));
+    }
+
+    #[test]
+    fn review_crop_inset_wider_than_region_is_zero_not_negative() {
+        let mut cfg = AutomationConfig::default();
+        // right_inset > width (1.0) collapses width to 0, not a negative number.
+        cfg.review_crop_adjust = ReviewCropAdjust {
+            top_extend: 0.05,
+            bottom_extend: 0.0,
+            left_inset: 0.0,
+            right_inset: 1.5,
+        };
+        let crop = review_crop_rect(&cfg, 0);
+        assert_eq!(crop.width, 0.0);
+        assert!(crop.height > 0.0);
+    }
 }

@@ -19,12 +19,24 @@ pub struct ReviewState {
     pub rows: Vec<ReviewRow>,
     /// Per-row editable score strings, parallel to `rows`: `edits[row][stage][slot]`.
     pub edits: Vec<[[String; 3]; 3]>,
-    /// false = show only `flagged`/`repaired` rows; true = show every row.
+    /// Master override: when true, every status is shown regardless of the
+    /// per-status toggles below (search still narrows).
     pub show_all: bool,
+    /// Per-status visibility toggles. Default: flagged + repaired on, ok + manual
+    /// off (the attention-needed rows). Combined with `search` (logical AND).
+    pub show_ok: bool,
+    pub show_repaired: bool,
+    pub show_flagged: bool,
+    pub show_manual: bool,
+    /// Live substring filter over the score cells + iteration (Ctrl+F style).
+    /// Independent of the status toggles, so it persists as they change.
+    pub search: String,
     /// An edit buffer differs from the saved value (enables 保存).
     pub dirty: bool,
     /// The screenshot currently rendered in the preview pane: `(iteration, texture)`.
     pub preview: Option<(u32, TextureHandle)>,
+    /// Iteration whose row is expanded to show inline per-stage crops, or None.
+    pub expanded: Option<u32>,
     /// Whether the review window is shown.
     pub open: bool,
 }
@@ -34,9 +46,12 @@ impl std::fmt::Debug for ReviewState {
         f.debug_struct("ReviewState")
             .field("session_path", &self.session_path)
             .field("rows", &self.rows.len())
-            .field("show_all", &self.show_all)
+            .field("show_flagged", &self.show_flagged)
+            .field("show_repaired", &self.show_repaired)
+            .field("search", &self.search)
             .field("dirty", &self.dirty)
             .field("open", &self.open)
+            .field("expanded", &self.expanded)
             .field("preview_iter", &self.preview.as_ref().map(|(i, _)| *i))
             .finish()
     }

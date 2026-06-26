@@ -17,7 +17,10 @@ pub mod runner;
 pub mod session_meta;
 pub mod state;
 
-pub use config::{get_config, init_config, AutomationConfig, ButtonConfig, RelativeRect};
+pub use config::{
+    get_config, init_config, review_crop_rect, AutomationConfig, ButtonConfig, RelativeRect,
+    ReviewCropAdjust,
+};
 pub use detection::{
     calculate_brightness, check_button_similarity, load_reference_histogram,
     measure_region_brightness, save_end_button_reference, save_skip_button_reference,
