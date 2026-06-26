@@ -410,12 +410,18 @@ pub fn render_review_window_contents(
         ui.checkbox(&mut review.show_all, "すべて表示");
         ui.separator();
         // Live substring search over the score cells + iteration (Ctrl+F style).
+        // Ctrl+F focuses the box — `ui.input` here reads this review viewport's
+        // own input, so the shortcut only fires while the review window is active.
+        let focus_search = ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F));
         ui.label("🔍");
-        ui.add(
+        let search_resp = ui.add(
             egui::TextEdit::singleline(&mut review.search)
-                .hint_text("スコア検索")
+                .hint_text("スコア検索 (Ctrl+F)")
                 .desired_width(120.0),
         );
+        if focus_search {
+            search_resp.request_focus();
+        }
         if !review.search.is_empty() && ui.small_button("✕").on_hover_text("検索をクリア").clicked() {
             review.search.clear();
         }
