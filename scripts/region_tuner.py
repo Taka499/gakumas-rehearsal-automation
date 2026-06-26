@@ -39,7 +39,7 @@ from urllib.parse import urlparse, parse_qs
 from PIL import Image, ImageChops
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SAMPLE_DIR = PROJECT_ROOT / "temp" / "failed_overlapped_samples"
+SAMPLE_DIR = PROJECT_ROOT / "tests" / "fixtures"
 PORT = 8777
 
 TESS_EXE = PROJECT_ROOT / "target" / "release" / "tesseract" / "tesseract.exe"
@@ -108,9 +108,12 @@ def load_params():
 
 
 def list_samples():
+    """Curated screenshots under tests/fixtures (searched recursively). The
+    custom-path box can still load any other screenshot under the repo root
+    (e.g. a specific run's output)."""
     out = []
     if SAMPLE_DIR.is_dir():
-        out += [str(p.relative_to(PROJECT_ROOT)).replace("\\", "/") for p in sorted(SAMPLE_DIR.glob("*.png"))]
+        out += [str(p.relative_to(PROJECT_ROOT)).replace("\\", "/") for p in sorted(SAMPLE_DIR.rglob("*.png"))]
     return out
 
 
