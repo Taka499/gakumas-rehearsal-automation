@@ -19,9 +19,11 @@ use crate::automation::runner::{
     extend_automation, get_last_outcome, is_automation_running, resume_automation, start_automation,
     AutomationOutcome,
 };
+use crate::automation::results_edit::{load_review_rows, save_review_rows, ReviewRow, RECOVERY_MANUAL};
 use crate::automation::state::request_abort;
 
-use state::{AutomationStatus, GuiState};
+use render::ReviewActions;
+use state::{AutomationStatus, GuiState, ReviewState};
 
 /// Menu item IDs for tray menu
 const MENU_SHOW_WINDOW: &str = "show_window";
@@ -74,6 +76,13 @@ impl GuiApp {
         };
         // Populate the resume picker with interrupted sessions found on disk.
         app.scan_resumable_sessions();
+        // Seed "latest session" to the newest folder on disk so the previous-run
+        // actions (charts/folder/review/extend) are reachable right after launch,
+        // before any run starts this session. This is what lets a user review a
+        // past session's OCR results without first kicking off a new run.
+        if app.state.latest_session_path.is_none() {
+            app.state.latest_session_path = newest_session_dir();
+        }
         app
     }
 
@@ -500,6 +509,171 @@ impl GuiApp {
         }
     }
 
+    /// Builds the per-row editable text buffers from a row's scores.
+    fn edits_from_rows(rows: &[ReviewRow]) -> Vec<[[String; 3]; 3]> {
+        rows.iter()
+            .map(|r| {
+                let mut e: [[String; 3]; 3] = Default::default();
+                for s in 0..3 {
+                    for c in 0..3 {
+                        e[s][c] = r.scores[s][c].to_string();
+                    }
+                }
+                e
+            })
+            .collect()
+    }
+
+    /// Handle "📝 結果を確認・修正" — load the latest session's results into the
+    /// review/edit window.
+    fn handle_open_review(&mut self) {
+        let path = match &self.state.latest_session_path {
+            Some(p) => p.clone(),
+            None => {
+                crate::log("GUI: 結果を確認 requested but no recent session is known");
+                return;
+            }
+        };
+        match load_review_rows(&path) {
+            Ok(rows) => {
+                let edits = Self::edits_from_rows(&rows);
+                self.state.review = Some(ReviewState {
+                    session_path: path,
+                    rows,
+                    edits,
+                    show_all: false,
+                    dirty: false,
+                    preview: None,
+                    open: true,
+                });
+                crate::log("GUI: Opened OCR result review window");
+            }
+            Err(e) => {
+                crate::log(&format!("GUI: Failed to load results for review: {}", e));
+            }
+        }
+    }
+
+    /// Load one iteration's screenshot into the review preview pane (cached until
+    /// another row is chosen). No-op if it is already the previewed iteration.
+    fn load_review_preview(&mut self, ctx: &egui::Context, iteration: u32) {
+        let review = match self.state.review.as_mut() {
+            Some(r) => r,
+            None => return,
+        };
+        if review.preview.as_ref().map_or(false, |(i, _)| *i == iteration) {
+            return;
+        }
+        let path = match review.rows.iter().find(|r| r.iteration == iteration) {
+            Some(r) => r.screenshot.clone(),
+            None => return,
+        };
+        match image::open(&path) {
+            Ok(img) => {
+                let rgba = img.to_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                let color = egui::ColorImage::from_rgba_unmultiplied(size, &rgba.into_raw());
+                let tex = ctx.load_texture(
+                    format!("review_preview_{}", iteration),
+                    color,
+                    egui::TextureOptions::LINEAR,
+                );
+                review.preview = Some((iteration, tex));
+            }
+            Err(e) => {
+                crate::log(&format!("GUI: Failed to open screenshot {}: {}", path, e));
+                review.preview = None;
+            }
+        }
+    }
+
+    /// Persist the review edits: parse each row's buffers, mark changed rows
+    /// `manual`, rewrite both CSVs, and re-seed the buffers from the saved rows.
+    fn handle_save_review(&mut self) {
+        let review = match self.state.review.as_mut() {
+            Some(r) => r,
+            None => return,
+        };
+        let mut changed = 0u32;
+        for (i, row) in review.rows.iter_mut().enumerate() {
+            let mut new_scores = row.scores;
+            let mut row_changed = false;
+            for s in 0..3 {
+                for c in 0..3 {
+                    match review.edits[i][s][c].trim().parse::<u32>() {
+                        Ok(v) => {
+                            if v != row.scores[s][c] {
+                                new_scores[s][c] = v;
+                                row_changed = true;
+                            }
+                        }
+                        // Non-numeric input: keep the prior value, reset the buffer.
+                        Err(_) => review.edits[i][s][c] = row.scores[s][c].to_string(),
+                    }
+                }
+            }
+            if row_changed {
+                row.scores = new_scores;
+                row.recovery = RECOVERY_MANUAL.to_string();
+                changed += 1;
+            }
+        }
+        match save_review_rows(&review.session_path, &review.rows) {
+            Ok(()) => {
+                review.dirty = false;
+                review.edits = Self::edits_from_rows(&review.rows);
+                crate::log(&format!(
+                    "GUI: Saved review edits ({} row(s) marked manual) to {}",
+                    changed,
+                    review.session_path.display()
+                ));
+            }
+            Err(e) => crate::log(&format!("GUI: Failed to save review edits: {}", e)),
+        }
+    }
+
+    /// Render the review/edit window (when open) and dispatch its actions.
+    ///
+    /// The review lives in its OWN top-level OS window (an egui *immediate
+    /// viewport*), not a panel floating inside the main window, so it is resized
+    /// independently and is never clipped by the main window's bounds.
+    fn render_review_window(&mut self, ctx: &egui::Context) {
+        if !self.state.review.as_ref().map_or(false, |r| r.open) {
+            return;
+        }
+        let mut actions = ReviewActions::default();
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("ocr_review_viewport"),
+            egui::ViewportBuilder::default()
+                .with_title("結果の確認・修正")
+                .with_inner_size([1200.0, 720.0])
+                .with_min_inner_size([700.0, 420.0])
+                // Match the main viewport: drag-and-drop off to avoid the
+                // RoInitialize (multithreaded COM) conflict noted in run_gui.
+                .with_drag_and_drop(false),
+            |vp_ctx, _class| {
+                egui::CentralPanel::default().show(vp_ctx, |ui| {
+                    let review = self.state.review.as_mut().unwrap();
+                    render::render_review_window_contents(ui, review, &mut actions);
+                });
+                if vp_ctx.input(|i| i.viewport().close_requested()) {
+                    actions.close = true;
+                }
+            },
+        );
+        if let Some(iter) = actions.preview_iter {
+            self.load_review_preview(ctx, iter);
+        }
+        if actions.save {
+            self.handle_save_review();
+        }
+        if actions.close {
+            if let Some(r) = self.state.review.as_mut() {
+                r.open = false;
+            }
+        }
+    }
+
     /// Handle open folder button click.
     fn handle_open_folder(&self) {
         if let Some(path) = &self.state.latest_session_path {
@@ -572,10 +746,14 @@ impl eframe::App for GuiApp {
                             if actions.back_to_idle { self.handle_back_to_idle(); }
                             if actions.dismiss_selected { self.handle_dismiss_selected(); }
                             if actions.extend { self.handle_extend(); }
+                            if actions.open_review { self.handle_open_review(); }
                         });
                 });
             });
         });
+
+        // Review/edit window (floats over the main panel when open).
+        self.render_review_window(ctx);
     }
 }
 
@@ -627,6 +805,29 @@ impl GuiApp {
             _ => {}
         }
     }
+}
+
+/// Newest session folder under the output directory, or `None` if there are no
+/// sessions. Folder names are `YYYYMMDD_HHMMSS`, so the lexicographically-largest
+/// name is the most recent. Only directories containing a `results.csv` qualify,
+/// so an empty/aborted-before-OCR folder is skipped.
+fn newest_session_dir() -> Option<std::path::PathBuf> {
+    let dir = crate::paths::get_output_dir();
+    let mut best: Option<(String, std::path::PathBuf)> = None;
+    for entry in std::fs::read_dir(&dir).ok()?.flatten() {
+        let path = entry.path();
+        if !path.is_dir() || !path.join("results.csv").exists() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if best.as_ref().map_or(true, |(b, _)| name > *b) {
+            best = Some((name, path));
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 /// Run the GUI application.

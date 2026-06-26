@@ -4,7 +4,7 @@
 
 use eframe::egui::{self, Color32, RichText, TextureHandle, Vec2};
 
-use super::state::{AutomationStatus, GuiState};
+use super::state::{AutomationStatus, GuiState, ReviewState};
 
 /// One-tap run-count presets shown beneath every run-count input. Edit this
 /// single array to change the buttons everywhere they appear.
@@ -109,6 +109,19 @@ pub struct PanelActions {
     pub dismiss_selected: bool,
     /// Run additional iterations into the most recent session's folder.
     pub extend: bool,
+    /// Open the OCR result review/edit window for the latest session.
+    pub open_review: bool,
+}
+
+/// Signals collected from the review/edit window in one frame.
+#[derive(Default)]
+pub struct ReviewActions {
+    /// 保存 pressed: write the edited rows back to the CSVs.
+    pub save: bool,
+    /// The window was closed (X) — drop the review state's `open` flag.
+    pub close: bool,
+    /// A row's 📷 was clicked: load this iteration's screenshot into the preview.
+    pub preview_iter: Option<u32>,
 }
 
 /// Renders the entire third column as a single state-driven panel: only the
@@ -163,6 +176,14 @@ fn render_idle(ui: &mut egui::Ui, state: &mut GuiState, actions: &mut PanelActio
         ui.add_space(6.0);
         if ui.button("📁 フォルダを開く").clicked() {
             actions.open_folder = true;
+        }
+        ui.add_space(6.0);
+        if ui
+            .button("📝 結果を確認・修正")
+            .on_hover_text("OCR結果を一覧し、画像を見ながら手動で修正できます")
+            .clicked()
+        {
+            actions.open_review = true;
         }
         render_extend_section(ui, &mut state.additional_iterations, actions);
     }
@@ -296,6 +317,16 @@ fn render_finished(
             actions.open_folder = true;
         }
     });
+    ui.add_space(8.0);
+    ui.add_enabled_ui(state.latest_session_path.is_some(), |ui| {
+        if ui
+            .button("📝 結果を確認・修正")
+            .on_hover_text("OCR結果を一覧し、画像を見ながら手動で修正できます")
+            .clicked()
+        {
+            actions.open_review = true;
+        }
+    });
 
     // 追加実行 (extend): only for a finished series that is NOT resumable
     // (Completed, or a non-resumable terminal state) and that has a folder.
@@ -345,6 +376,194 @@ fn render_generated_files(ui: &mut egui::Ui, session_path: &std::path::Path) {
         RichText::new("「フォルダを開く」で結果を確認")
             .color(Color32::from_rgb(0, 120, 200)),
     );
+}
+
+/// Colour for a recovery flag badge.
+fn recovery_color(recovery: &str) -> Color32 {
+    match recovery {
+        "ok" => Color32::from_rgb(0, 150, 0),
+        "repaired" => Color32::from_rgb(0, 120, 200),
+        "manual" => Color32::from_rgb(150, 0, 150),
+        _ => Color32::from_rgb(200, 60, 0), // flagged / unknown
+    }
+}
+
+/// Renders the body of the review/edit window: a filtered, editable table of OCR
+/// results on the left and a screenshot preview pane on the right. Reads and
+/// mutates `review` (the edit buffers, filter, dirty flag) and emits clicks into
+/// `actions` for the caller to dispatch (load preview / save / close).
+pub fn render_review_window_contents(
+    ui: &mut egui::Ui,
+    review: &mut ReviewState,
+    actions: &mut ReviewActions,
+) {
+    let attention = review
+        .rows
+        .iter()
+        .filter(|r| r.recovery == "flagged" || r.recovery == "repaired")
+        .count();
+
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut review.show_all, "すべて表示");
+        ui.label(format!("要確認 {} / 全 {} 件", attention, review.rows.len()));
+        ui.separator();
+        if ui
+            .add_enabled(review.dirty, egui::Button::new(RichText::new("💾 保存").strong()))
+            .clicked()
+        {
+            actions.save = true;
+        }
+        if review.dirty {
+            ui.label(
+                RichText::new("● 未保存の変更")
+                    .color(Color32::from_rgb(200, 120, 0))
+                    .small(),
+            );
+        }
+    });
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new("📷 で画像を表示し、セルを直接編集して「保存」してください")
+            .small()
+            .color(Color32::from_rgb(0, 120, 200)),
+    );
+    ui.separator();
+
+    // Snapshot which rows to show (index list) so the borrow on `review.rows`
+    // during filtering does not collide with the mutable cell editing below.
+    let show_all = review.show_all;
+    let visible: Vec<usize> = (0..review.rows.len())
+        .filter(|&i| {
+            show_all || review.rows[i].recovery == "flagged" || review.rows[i].recovery == "repaired"
+        })
+        .collect();
+
+    // Explicit fixed-width split: a left table region and a right preview region,
+    // each an `allocate_ui_with_layout` child of a bounded size so its content is
+    // clipped to its own area — the wide score table can never spill over the
+    // preview (the bug with the old equal `ui.columns` split).
+    let avail = ui.available_size();
+    let preview_w = (avail.x * 0.28).clamp(200.0, 320.0);
+    let table_w = (avail.x - preview_w - 14.0).max(220.0);
+    let h = avail.y.max(120.0);
+
+    ui.horizontal_top(|ui| {
+        // --- Left: the editable table (bounded + both-axis scroll). ---
+        ui.allocate_ui_with_layout(
+            Vec2::new(table_w, h),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_min_size(Vec2::new(table_w, h));
+                // NOTE: do NOT clamp max width here — that squeezes the score
+                // cells narrower than their digits. The ScrollArea below clips to
+                // this region and adds a horizontal scrollbar when the natural
+                // table is wider, so cells always keep their full width.
+                if visible.is_empty() {
+                    ui.label("要確認の行はありません（「すべて表示」で全件表示）");
+                    return;
+                }
+                egui::ScrollArea::both()
+                    .id_source("review_table_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        // One Grid column PER score (12 total): nesting three
+                        // TextEdits in a single Grid cell makes the Grid clip the
+                        // last one, so each score gets its own column instead.
+                        egui::Grid::new("review_grid")
+                            .striped(true)
+                            .num_columns(12)
+                            .spacing([4.0, 4.0])
+                            .show(ui, |ui| {
+                                ui.label(RichText::new("#").strong());
+                                ui.label(RichText::new("ステージ1").strong());
+                                ui.label("");
+                                ui.label("");
+                                ui.label(RichText::new("ステージ2").strong());
+                                ui.label("");
+                                ui.label("");
+                                ui.label(RichText::new("ステージ3").strong());
+                                ui.label("");
+                                ui.label("");
+                                ui.label(RichText::new("状態").strong());
+                                ui.label("");
+                                ui.end_row();
+
+                                for &i in &visible {
+                                    let iteration = review.rows[i].iteration;
+                                    ui.label(iteration.to_string());
+                                    for s in 0..3 {
+                                        for c in 0..3 {
+                                            // `add_sized` allocates an EXACT cell
+                                            // size that the Grid uses for the column
+                                            // width — unlike `desired_width`, whose
+                                            // small reported minimum let empty-header
+                                            // columns collapse and clip the digits.
+                                            // 72px fits a 7-digit score (1,234,445).
+                                            let resp = ui.add_sized(
+                                                [72.0, 20.0],
+                                                egui::TextEdit::singleline(
+                                                    &mut review.edits[i][s][c],
+                                                )
+                                                .id_source(("cell", i, s, c)),
+                                            );
+                                            if resp.changed() {
+                                                review.dirty = true;
+                                            }
+                                        }
+                                    }
+                                    let rec = review.rows[i].recovery.clone();
+                                    ui.label(
+                                        RichText::new(&rec).color(recovery_color(&rec)).small(),
+                                    );
+                                    if ui
+                                        .button("📷")
+                                        .on_hover_text("この行の画像を表示")
+                                        .clicked()
+                                    {
+                                        actions.preview_iter = Some(iteration);
+                                    }
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            },
+        );
+
+        ui.separator();
+
+        // --- Right: the screenshot preview (bounded width). ---
+        ui.allocate_ui_with_layout(
+            Vec2::new(preview_w, h),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_min_size(Vec2::new(preview_w, h));
+                ui.set_max_width(preview_w);
+                ui.label(RichText::new("画像プレビュー").strong());
+                ui.separator();
+                match &review.preview {
+                    Some((iter, tex)) => {
+                        ui.label(format!("{}回目", iter));
+                        ui.add_space(2.0);
+                        let img_w = (preview_w - 12.0).max(40.0);
+                        let size = tex.size_vec2();
+                        let aspect = if size.x > 0.0 { size.y / size.x } else { 1.0 };
+                        egui::ScrollArea::vertical()
+                            .id_source("review_preview_scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.image((tex.id(), Vec2::new(img_w, img_w * aspect)));
+                            });
+                    }
+                    None => {
+                        ui.label(
+                            RichText::new("📷 を押すと、その行の画像を\nここに表示します")
+                                .color(Color32::from_gray(120)),
+                        );
+                    }
+                }
+            },
+        );
+    });
 }
 
 /// Idle-only resume picker, collapsed by default so it never feels always-on.

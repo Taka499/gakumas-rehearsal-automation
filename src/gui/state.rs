@@ -2,9 +2,45 @@
 //!
 //! Tracks user input values and automation status for display.
 
+use crate::automation::results_edit::ReviewRow;
 use crate::automation::session_meta::ResumableSession;
+use eframe::egui::TextureHandle;
 use std::path::PathBuf;
 use std::time::Instant;
+
+/// State for the OCR result review/edit window (see EXECPLAN_OCR_REVIEW_EDIT_GUI).
+///
+/// Holds the loaded result rows for one finished session, parallel editable text
+/// buffers (one nine-cell grid per row), the filter/dirty flags, and the
+/// currently-previewed screenshot texture. `Debug` is implemented by hand because
+/// `TextureHandle` is a GPU handle we do not want to format.
+pub struct ReviewState {
+    pub session_path: PathBuf,
+    pub rows: Vec<ReviewRow>,
+    /// Per-row editable score strings, parallel to `rows`: `edits[row][stage][slot]`.
+    pub edits: Vec<[[String; 3]; 3]>,
+    /// false = show only `flagged`/`repaired` rows; true = show every row.
+    pub show_all: bool,
+    /// An edit buffer differs from the saved value (enables 保存).
+    pub dirty: bool,
+    /// The screenshot currently rendered in the preview pane: `(iteration, texture)`.
+    pub preview: Option<(u32, TextureHandle)>,
+    /// Whether the review window is shown.
+    pub open: bool,
+}
+
+impl std::fmt::Debug for ReviewState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReviewState")
+            .field("session_path", &self.session_path)
+            .field("rows", &self.rows.len())
+            .field("show_all", &self.show_all)
+            .field("dirty", &self.dirty)
+            .field("open", &self.open)
+            .field("preview_iter", &self.preview.as_ref().map(|(i, _)| *i))
+            .finish()
+    }
+}
 
 /// Automation status for display in GUI.
 #[derive(Clone, Debug)]
@@ -143,6 +179,8 @@ pub struct GuiState {
     pub resumable_sessions: Vec<ResumableSession>,
     /// Index of the currently selected resumable session in the picker.
     pub selected_resume: Option<usize>,
+    /// Open review/edit window for the latest session's OCR results, if any.
+    pub review: Option<ReviewState>,
 }
 
 impl Default for GuiState {
@@ -155,6 +193,7 @@ impl Default for GuiState {
             automation_start_time: None,
             resumable_sessions: Vec::new(),
             selected_resume: None,
+            review: None,
         }
     }
 }

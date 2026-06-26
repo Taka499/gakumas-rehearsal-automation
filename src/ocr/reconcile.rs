@@ -145,7 +145,18 @@ pub fn reconcile_stage(
     // Classify by whether the scores actually changed, not by raw cost: a clean
     // score confirmed only under a one-digit-deleted total carries a non-zero
     // selection penalty but was not edited, so it is `Ok`, not `Repaired`.
-    let recovery = if tie || bonus_disagrees {
+    //
+    // A cost-0, unedited read that the total confirms is trusted as `Ok` even if
+    // the bonus disagrees: the bonus is only a cross-check (it equals
+    // `floor(max/5)`) and over-detects digits exactly like the total's comma
+    // does, so a noisy bonus must not flag a read the total already confirms. The
+    // bonus still guards *edited* (cost > 0) reconstructions below, where it
+    // genuinely disambiguates an uncertain repair. (A million lost from a non-max
+    // slot — the case the bonus was meant to catch — makes the total *not* match
+    // at cost 0, so it never reaches this branch.)
+    let recovery = if chosen == ocr_scores && min_cost == 0 && !tie {
+        Recovery::Ok
+    } else if tie || bonus_disagrees {
         Recovery::Flagged
     } else if chosen == ocr_scores {
         Recovery::Ok
@@ -798,6 +809,29 @@ mod tests {
         let (scores, rec) =
             reconcile_stage([1240514, 178565, 455013], None, Some(248102));
         assert_eq!(scores, [1240514, 178565, 455013]);
+        assert_eq!(rec, Recovery::Flagged);
+    }
+
+    // --- Bonus over-detection must not flag a total-confirmed read
+    //     (run 20260624_214602, multi-character stages). ---
+
+    #[test]
+    fn test_total_confirmed_over_detected_bonus_is_ok() {
+        // Scores correct and the total confirms them exactly (cost 0), but the
+        // bonus over-detected a digit (true floor(372069/5)=74413, OCR'd 744135).
+        // The noisy bonus must NOT flag a total-confirmed read.
+        let (scores, rec) = reconcile_stage([365181, 372069, 357515], Some(1169178), Some(744135));
+        assert_eq!(scores, [365181, 372069, 357515]);
+        assert_eq!(rec, Recovery::Ok);
+    }
+
+    #[test]
+    fn test_edited_repair_still_bonus_guarded() {
+        // An *edited* (cost > 0) reconstruction whose derived bonus contradicts a
+        // valid OCR'd bonus is still flagged — the bonus guards uncertain repairs.
+        // [1327534,151661,0] repairs to [1327533,1151661,0] (cost > 0); a bonus of
+        // 200000 (!= floor(1327533/5)=265506) must downgrade it to Flagged.
+        let (_scores, rec) = reconcile_stage([1327534, 151661, 0], Some(2744700), Some(200000));
         assert_eq!(rec, Recovery::Flagged);
     }
 
