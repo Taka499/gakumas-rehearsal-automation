@@ -544,6 +544,7 @@ impl GuiApp {
                     show_all: false,
                     dirty: false,
                     preview: None,
+                    expanded: None,
                     open: true,
                 });
                 crate::log("GUI: Opened OCR result review window");
@@ -663,6 +664,25 @@ impl GuiApp {
         );
         if let Some(iter) = actions.preview_iter {
             self.load_review_preview(ctx, iter);
+        }
+        if let Some(iter) = actions.toggle_expand {
+            // Toggle the expanded row; on expand, load that row's screenshot
+            // texture so the inline per-stage crops have a source to sample.
+            let expand = match self.state.review.as_mut() {
+                Some(r) => {
+                    if r.expanded == Some(iter) {
+                        r.expanded = None;
+                        false
+                    } else {
+                        r.expanded = Some(iter);
+                        true
+                    }
+                }
+                None => false,
+            };
+            if expand {
+                self.load_review_preview(ctx, iter);
+            }
         }
         if actions.save {
             self.handle_save_review();

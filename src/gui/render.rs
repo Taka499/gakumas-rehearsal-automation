@@ -122,6 +122,8 @@ pub struct ReviewActions {
     pub close: bool,
     /// A row's 📷 was clicked: load this iteration's screenshot into the preview.
     pub preview_iter: Option<u32>,
+    /// A row's 📷 was clicked: toggle that iteration's expanded inline crops.
+    pub toggle_expand: Option<u32>,
 }
 
 /// Renders the entire third column as a single state-driven panel: only the

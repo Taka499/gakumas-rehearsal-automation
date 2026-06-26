@@ -25,6 +25,8 @@ pub struct ReviewState {
     pub dirty: bool,
     /// The screenshot currently rendered in the preview pane: `(iteration, texture)`.
     pub preview: Option<(u32, TextureHandle)>,
+    /// Iteration whose row is expanded to show inline per-stage crops, or None.
+    pub expanded: Option<u32>,
     /// Whether the review window is shown.
     pub open: bool,
 }
@@ -37,6 +39,7 @@ impl std::fmt::Debug for ReviewState {
             .field("show_all", &self.show_all)
             .field("dirty", &self.dirty)
             .field("open", &self.open)
+            .field("expanded", &self.expanded)
             .field("preview_iter", &self.preview.as_ref().map(|(i, _)| *i))
             .finish()
     }
