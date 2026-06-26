@@ -284,7 +284,7 @@ HTML = r"""<!doctype html>
   <div id="rows"></div>
   <h3>Review crop <span class="muted">(purple — portraits + scores shown in the GUI)</span></h3>
   <div class="srow"><span class="lab">top extend</span><input type="range" id="rtop" min="0" max="0.20" step="0.005" value="0.05"><b id="rtopval">0.050</b></div>
-  <div class="srow"><span class="lab">bottom extend</span><input type="range" id="rbot" min="0" max="0.10" step="0.005" value="0.00"><b id="rbotval">0.000</b></div>
+  <div class="srow"><span class="lab">bottom extend</span><input type="range" id="rbot" min="0" max="0.25" step="0.005" value="0.00"><b id="rbotval">0.000</b></div>
   <div class="srow"><span class="lab">left inset</span><input type="range" id="rleft" min="-0.10" max="0.40" step="0.005" value="0.00"><b id="rleftval">0.000</b></div>
   <div class="srow"><span class="lab">right inset</span><input type="range" id="rright" min="-0.10" max="0.50" step="0.005" value="0.22"><b id="rrightval">0.220</b></div>
   <div class="crops"><canvas id="crop0"></canvas><canvas id="crop1"></canvas><canvas id="crop2"></canvas></div>

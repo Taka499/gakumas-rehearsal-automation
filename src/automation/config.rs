@@ -59,11 +59,15 @@ pub struct ReviewCropAdjust {
 
 impl Default for ReviewCropAdjust {
     fn default() -> Self {
+        // Calibrated against real result screens with scripts/region_tuner.py:
+        // the character portraits + printed scores sit in the centred ~0.56-wide
+        // column and extend below the score band, so the crop trims both sides and
+        // extends downward (a readable ~1.8:1 block) rather than upward.
         Self {
             top_extend: 0.05,
-            bottom_extend: 0.0,
-            left_inset: 0.0,
-            right_inset: 0.22,
+            bottom_extend: 0.1,
+            left_inset: 0.21,
+            right_inset: 0.23,
         }
     }
 }
@@ -383,18 +387,19 @@ mod tests {
     }
 
     #[test]
-    fn review_crop_default_extends_over_portraits_and_trims_right() {
+    fn review_crop_default_frames_portrait_column() {
         let cfg = AutomationConfig::default();
         let s = cfg.score_regions[0]; // { x:0.0, y:0.179, width:1.0, height:0.022 }
         let crop = review_crop_rect(&cfg, 0);
 
-        // Extends upward over the portraits (top above the digits band).
-        assert!(crop.y < s.y, "crop.y {} should be above score y {}", crop.y, s.y);
-        // Bottom reaches at least the digits band bottom.
-        assert!(crop.y + crop.height >= s.y + s.height - 1e-6);
-        // Right margin trimmed (詳細 button dropped): narrower than full width.
+        // Calibrated default trims both sides to the centred portrait column...
+        assert!(crop.x > s.x, "crop.x {} should be right of score x {}", crop.x, s.x);
         assert!(crop.width < s.width, "crop.width {} should be < {}", crop.width, s.width);
-        assert!((crop.width - 0.78).abs() < 1e-5, "crop.width {} ~ 0.78", crop.width);
+        assert!((crop.width - 0.56).abs() < 1e-5, "crop.width {} ~ 0.56", crop.width);
+        // ...slightly above the digits band and extending below it (portraits sit
+        // under the scores on this screen).
+        assert!(crop.y < s.y, "crop.y {} should be above score y {}", crop.y, s.y);
+        assert!(crop.y + crop.height > s.y + s.height, "crop should extend below the score band");
         // Valid UV rect inside the image.
         assert!(in_unit(crop.x) && in_unit(crop.y));
         assert!(in_unit(crop.x + crop.width) && in_unit(crop.y + crop.height));
