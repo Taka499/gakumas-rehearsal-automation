@@ -120,8 +120,6 @@ pub struct ReviewActions {
     pub save: bool,
     /// The window was closed (X) — drop the review state's `open` flag.
     pub close: bool,
-    /// A row's 📷 was clicked: load this iteration's screenshot into the preview.
-    pub preview_iter: Option<u32>,
     /// A row's 📷 was clicked: toggle that iteration's expanded inline crops.
     pub toggle_expand: Option<u32>,
 }
@@ -440,132 +438,124 @@ pub fn render_review_window_contents(
         })
         .collect();
 
-    // Explicit fixed-width split: a left table region and a right preview region,
-    // each an `allocate_ui_with_layout` child of a bounded size so its content is
-    // clipped to its own area — the wide score table can never spill over the
-    // preview (the bug with the old equal `ui.columns` split).
-    let avail = ui.available_size();
-    let preview_w = (avail.x * 0.28).clamp(200.0, 320.0);
-    let table_w = (avail.x - preview_w - 14.0).max(220.0);
-    let h = avail.y.max(120.0);
+    if visible.is_empty() {
+        ui.label("要確認の行はありません（「すべて表示」で全件表示）");
+        return;
+    }
 
-    ui.horizontal_top(|ui| {
-        // --- Left: the editable table (bounded + both-axis scroll). ---
-        ui.allocate_ui_with_layout(
-            Vec2::new(table_w, h),
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                ui.set_min_size(Vec2::new(table_w, h));
-                // NOTE: do NOT clamp max width here — that squeezes the score
-                // cells narrower than their digits. The ScrollArea below clips to
-                // this region and adds a horizontal scrollbar when the natural
-                // table is wider, so cells always keep their full width.
-                if visible.is_empty() {
-                    ui.label("要確認の行はありません（「すべて表示」で全件表示）");
-                    return;
+    // Dynamic column sizing: the cells fill the window width and grow when the
+    // window is widened (no fixed 72px cap). Reserve room for the leading "#"
+    // column and the trailing 状態/📷 cluster, split the rest over the nine
+    // score cells, and clamp so cells stay readable but never absurdly wide.
+    let iter_w = 44.0_f32; // fits "1000"
+    let avail_w = ui.available_width();
+    let cell_w = ((avail_w - iter_w - 150.0) / 9.0).clamp(60.0, 160.0);
+    let sp = ui.spacing().item_spacing.x;
+    // A stage's three cells laid out in a `ui.horizontal` span 3 cells + 2 gaps.
+    // The per-stage crop below uses this exact width so it sits flush under them.
+    let group_w = cell_w * 3.0 + sp * 2.0;
+
+    egui::ScrollArea::both()
+        .id_source("review_table_scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            // Header row, aligned to the same widths as the data rows.
+            ui.horizontal(|ui| {
+                ui.add_sized([iter_w, 20.0], egui::Label::new(RichText::new("#").strong()));
+                for name in ["ステージ1", "ステージ2", "ステージ3"] {
+                    ui.add_sized([group_w, 20.0], egui::Label::new(RichText::new(name).strong()));
                 }
-                egui::ScrollArea::both()
-                    .id_source("review_table_scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        // One Grid column PER score (12 total): nesting three
-                        // TextEdits in a single Grid cell makes the Grid clip the
-                        // last one, so each score gets its own column instead.
-                        egui::Grid::new("review_grid")
-                            .striped(true)
-                            .num_columns(12)
-                            .spacing([4.0, 4.0])
-                            .show(ui, |ui| {
-                                ui.label(RichText::new("#").strong());
-                                ui.label(RichText::new("ステージ1").strong());
-                                ui.label("");
-                                ui.label("");
-                                ui.label(RichText::new("ステージ2").strong());
-                                ui.label("");
-                                ui.label("");
-                                ui.label(RichText::new("ステージ3").strong());
-                                ui.label("");
-                                ui.label("");
-                                ui.label(RichText::new("状態").strong());
-                                ui.label("");
-                                ui.end_row();
+                ui.label(RichText::new("状態").strong());
+            });
+            ui.separator();
 
-                                for &i in &visible {
-                                    let iteration = review.rows[i].iteration;
-                                    ui.label(iteration.to_string());
-                                    for s in 0..3 {
-                                        for c in 0..3 {
-                                            // `add_sized` allocates an EXACT cell
-                                            // size that the Grid uses for the column
-                                            // width — unlike `desired_width`, whose
-                                            // small reported minimum let empty-header
-                                            // columns collapse and clip the digits.
-                                            // 72px fits a 7-digit score (1,234,445).
-                                            let resp = ui.add_sized(
-                                                [72.0, 20.0],
-                                                egui::TextEdit::singleline(
-                                                    &mut review.edits[i][s][c],
-                                                )
-                                                .id_source(("cell", i, s, c)),
-                                            );
-                                            if resp.changed() {
-                                                review.dirty = true;
-                                            }
-                                        }
-                                    }
-                                    let rec = review.rows[i].recovery.clone();
-                                    ui.label(
-                                        RichText::new(&rec).color(recovery_color(&rec)).small(),
+            for &i in &visible {
+                let iteration = review.rows[i].iteration;
+                let expanded = review.expanded == Some(iteration);
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [iter_w, 20.0],
+                        egui::Label::new(RichText::new(iteration.to_string())),
+                    );
+                    for s in 0..3 {
+                        ui.vertical(|ui| {
+                            // The three editable cells for this stage.
+                            ui.horizontal(|ui| {
+                                for c in 0..3 {
+                                    let resp = ui.add_sized(
+                                        [cell_w, 20.0],
+                                        egui::TextEdit::singleline(&mut review.edits[i][s][c])
+                                            .id_source(("cell", i, s, c)),
                                     );
-                                    if ui
-                                        .button("📷")
-                                        .on_hover_text("この行の画像を表示")
-                                        .clicked()
-                                    {
-                                        actions.preview_iter = Some(iteration);
+                                    if resp.changed() {
+                                        review.dirty = true;
                                     }
-                                    ui.end_row();
                                 }
                             });
-                    });
-            },
-        );
-
-        ui.separator();
-
-        // --- Right: the screenshot preview (bounded width). ---
-        ui.allocate_ui_with_layout(
-            Vec2::new(preview_w, h),
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                ui.set_min_size(Vec2::new(preview_w, h));
-                ui.set_max_width(preview_w);
-                ui.label(RichText::new("画像プレビュー").strong());
+                            // When expanded, this stage's crop (character icons +
+                            // printed scores) sits directly under its three cells,
+                            // exactly as wide as the cell group. The mutable borrow
+                            // of `review.edits` above has ended, so the immutable
+                            // read of `review.preview` here is fine.
+                            if expanded {
+                                draw_stage_crop(ui, review, iteration, s, group_w);
+                            }
+                        });
+                    }
+                    let rec = review.rows[i].recovery.clone();
+                    ui.label(RichText::new(&rec).color(recovery_color(&rec)).small());
+                    let label = if expanded { "📷✓" } else { "📷" };
+                    if ui
+                        .button(label)
+                        .on_hover_text("画像で確認（クリックで開閉）")
+                        .clicked()
+                    {
+                        actions.toggle_expand = Some(iteration);
+                    }
+                });
                 ui.separator();
-                match &review.preview {
-                    Some((iter, tex)) => {
-                        ui.label(format!("{}回目", iter));
-                        ui.add_space(2.0);
-                        let img_w = (preview_w - 12.0).max(40.0);
-                        let size = tex.size_vec2();
-                        let aspect = if size.x > 0.0 { size.y / size.x } else { 1.0 };
-                        egui::ScrollArea::vertical()
-                            .id_source("review_preview_scroll")
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                ui.image((tex.id(), Vec2::new(img_w, img_w * aspect)));
-                            });
-                    }
-                    None => {
-                        ui.label(
-                            RichText::new("📷 を押すと、その行の画像を\nここに表示します")
-                                .color(Color32::from_gray(120)),
-                        );
-                    }
-                }
-            },
-        );
-    });
+            }
+        });
+}
+
+/// Draw one stage's inline review crop — the character portraits and their
+/// printed scores — as a UV sub-region of the expanded row's already-loaded
+/// full screenshot texture. `width` is the stage's three-cell width; the height
+/// follows the crop's native pixel aspect so the image is never distorted.
+fn draw_stage_crop(
+    ui: &mut egui::Ui,
+    review: &ReviewState,
+    iteration: u32,
+    stage: usize,
+    width: f32,
+) {
+    let tex = match &review.preview {
+        Some((iter, tex)) if *iter == iteration => tex,
+        _ => {
+            // Texture not yet cached for this row (loads on the dispatch after the
+            // 📷 click); show a hint rather than a blank gap.
+            ui.add_space(2.0);
+            ui.label(RichText::new("画像を読み込み中…").small().weak());
+            return;
+        }
+    };
+    let cfg = crate::automation::get_config();
+    let crop = crate::automation::review_crop_rect(cfg, stage);
+    if crop.width <= 0.0 || crop.height <= 0.0 {
+        return;
+    }
+    let uv = egui::Rect::from_min_max(
+        egui::pos2(crop.x, crop.y),
+        egui::pos2(crop.x + crop.width, crop.y + crop.height),
+    );
+    // Native aspect from the actual loaded texture (e.g. 721x1281), not a
+    // hardcoded constant, so any capture resolution renders undistorted.
+    let tex_sz = tex.size_vec2();
+    let crop_w_px = (crop.width * tex_sz.x).max(1.0);
+    let crop_h_px = (crop.height * tex_sz.y).max(1.0);
+    let height = width * (crop_h_px / crop_w_px);
+    ui.add_space(2.0);
+    ui.add(egui::Image::new((tex.id(), Vec2::new(width, height))).uv(uv));
 }
 
 /// Idle-only resume picker, collapsed by default so it never feels always-on.

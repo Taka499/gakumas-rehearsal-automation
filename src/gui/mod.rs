@@ -662,9 +662,6 @@ impl GuiApp {
                 }
             },
         );
-        if let Some(iter) = actions.preview_iter {
-            self.load_review_preview(ctx, iter);
-        }
         if let Some(iter) = actions.toggle_expand {
             // Toggle the expanded row; on expand, load that row's screenshot
             // texture so the inline per-stage crops have a source to sample.
