@@ -318,6 +318,13 @@ fn slot_candidates(v: u32) -> Vec<Cand> {
         bases.push((1_000_000 + tail, BaseKind::Prepend));
         bases.push((2_000_000 + tail, BaseKind::Prepend));
     }
+    // A valid-looking 2,XXX,XXX whose leading "1" was misread as "2" (e.g.
+    // 2,396,184 OCR'd for a true 1,396,184). Offer the 1,XXX,XXX reading; the
+    // exact total disambiguates — a genuine 2M score keeps its raw value at cost
+    // 0, so the swap only wins when the checksum actually demands it.
+    if (2_000_000..MAX_SCORE).contains(&v) {
+        bases.push((1_000_000 + v % 1_000_000, BaseKind::Prepend));
+    }
 
     let mut out: Vec<Cand> = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
@@ -459,7 +466,21 @@ fn resolve_without_checksum(
         }
     }
 
-    // No total-solve: lean on the bonus to corroborate the raw read.
+    // Reaching here means a usable total was provided but NO candidate combo
+    // satisfied it. For a multi-score stage that is definitive: the scores do not
+    // sum to the total, so digits were lost — flag, never accept. (Collision-prone
+    // multis already returned above; this catches all-sub-million garble where
+    // every score lost digits, e.g. [1383, 64377, 364] for the true
+    // [1383068, 1377364, 1278247] with a correct total of 4,315,292 — which would
+    // otherwise have slipped through as a silent `Ok`.) The bonus cannot rescue it:
+    // it only pins the max, so a non-max garbled slot stays invisible.
+    if nonzero.len() >= 2 {
+        return (ocr_scores, Recovery::Flagged);
+    }
+
+    // A single (or zero) non-zero slot: a noisy total need not condemn a clean
+    // lone score (its solve attempt above just failed). Lean on the bonus, which
+    // for one score fully corroborates it (the score IS the max).
     let max_plausible = ocr_scores
         .iter()
         .copied()
@@ -1193,6 +1214,41 @@ mod tests {
             rows, recovered, best_effort, stayed, mism.len()
         );
         assert!(mism.is_empty(), "{} unexpected mismatches", mism.len());
+    }
+
+    #[test]
+    fn test_multi_score_unsatisfiable_total_flags_not_ok() {
+        // Run 20260629_014136 it200 (false positive): every score lost 3-4 digits,
+        // so no candidate reaches the truth and the (correct) total 4,315,292 is
+        // unsatisfiable. A multi-score row that contradicts a usable total must
+        // FLAG, not silently accept the garbage as `Ok`.
+        let (scores, rec) = reconcile_stage([1383, 64377, 364], Some(4315292), None);
+        assert_eq!(scores, [1383, 64377, 364]); // unchanged (best-effort)
+        assert_eq!(rec, Recovery::Flagged);
+    }
+
+    #[test]
+    fn test_leading_two_to_one_substitution() {
+        // Run 20260628_223009: a valid-looking 2,XXX,XXX whose leading "1" OCR'd
+        // as "2", on a non-max slot; the (correct) total disambiguates exactly.
+        // it131: c2 2,396,184 -> 1,396,184; c1 units 1->7.
+        let (s1, r1) = reconcile_stage([1201271, 2396184, 1541984], Some(4447841), Some(308396));
+        assert_eq!(s1, [1201277, 1396184, 1541984]);
+        assert_eq!(r1, Recovery::Repaired);
+        // it194: c2 2,093,004 -> 1,093,004; c1 units 1->7.
+        let (s2, r2) = reconcile_stage([1415951, 2093004, 964825], Some(3756977), Some(283191));
+        assert_eq!(s2, [1415957, 1093004, 964825]);
+        assert_eq!(r2, Recovery::Repaired);
+    }
+
+    #[test]
+    fn test_genuine_two_million_not_swapped() {
+        // Regression: a real 2,134,567 with a matching total must keep its value
+        // (the 1,134,567 swap candidate exists but loses — raw wins at cost 0).
+        let (scores, rec) =
+            reconcile_stage([2134567, 500000, 300000], Some(3361480), Some(426913));
+        assert_eq!(scores, [2134567, 500000, 300000]);
+        assert_eq!(rec, Recovery::Ok);
     }
 
     #[test]

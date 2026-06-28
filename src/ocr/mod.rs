@@ -34,6 +34,12 @@ pub struct StageReadout {
     pub flags: [Recovery; 3],
 }
 
+/// Alternate luminance thresholds for the multi-threshold total retry, tried in
+/// order when the primary `total_threshold` read can't be reconciled. Spread
+/// around the 210 default: lower cutoffs sharpen a "3" that 210 reads as "5";
+/// higher ones drop a faint comma/Pt pixel that 210 reads as an extra digit.
+const TOTAL_ALT_THRESHOLDS: &[u8] = &[180, 220, 190, 200, 230, 170, 240];
+
 /// High-level function: screenshot → per-stage readout using per-stage cropping.
 ///
 /// For each of the 3 stages, crops and OCRs the score row, the isolated stage
@@ -80,8 +86,41 @@ pub fn ocr_screenshot(
 
         // Reconstruct overlapping-million corruption via the total/bonus checksum.
         let raw = readout.scores[stage_idx];
-        let (mut reconciled, mut flag) =
-            reconcile_stage(raw, readout.totals[stage_idx], readout.bonuses[stage_idx]);
+        let bonus = readout.bonuses[stage_idx];
+        let (mut reconciled, mut flag) = reconcile_stage(raw, readout.totals[stage_idx], bonus);
+
+        // Multi-threshold total retry. The isolated total OCR is threshold-
+        // sensitive in opposite directions: at one cutoff a "3" reads as "5", at
+        // another a thousands comma leaks an extra digit — so no single
+        // `total_threshold` reads every total correctly. When the primary read
+        // can't be reconciled, re-OCR the total crop at alternate thresholds and
+        // adopt the first reading that yields a non-flagged *exact-checksum*
+        // recovery (still no guessing — only an exact total is accepted). Cheap:
+        // it runs only on the ~7% of stages the primary read flags, and stops at
+        // the first success.
+        if flag == Recovery::Flagged {
+            for &alt in TOTAL_ALT_THRESHOLDS {
+                if alt == total_threshold {
+                    continue;
+                }
+                let alt_bin = threshold_bright_pixels(&total_crop, alt);
+                let alt_total = recognize_single_number(&alt_bin, "0123456789,", false)?;
+                if alt_total.is_none() || alt_total == readout.totals[stage_idx] {
+                    continue;
+                }
+                let (r2, f2) = reconcile_stage(raw, alt_total, bonus);
+                if f2 != Recovery::Flagged {
+                    crate::log(&format!(
+                        "OCR stage {}: total retry t{} {:?} -> {:?} (total {:?}->{:?})",
+                        stage_idx + 1, alt, raw, r2, readout.totals[stage_idx], alt_total
+                    ));
+                    reconciled = r2;
+                    flag = f2;
+                    readout.totals[stage_idx] = alt_total;
+                    break;
+                }
+            }
+        }
 
         // Fallback for cases the comma-based tokenizer can't recover (chiefly two
         // adjacent collisions, which scramble the comma grouping): reconstruct
