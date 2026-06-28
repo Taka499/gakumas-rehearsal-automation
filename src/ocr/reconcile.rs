@@ -466,7 +466,21 @@ fn resolve_without_checksum(
         }
     }
 
-    // No total-solve: lean on the bonus to corroborate the raw read.
+    // Reaching here means a usable total was provided but NO candidate combo
+    // satisfied it. For a multi-score stage that is definitive: the scores do not
+    // sum to the total, so digits were lost — flag, never accept. (Collision-prone
+    // multis already returned above; this catches all-sub-million garble where
+    // every score lost digits, e.g. [1383, 64377, 364] for the true
+    // [1383068, 1377364, 1278247] with a correct total of 4,315,292 — which would
+    // otherwise have slipped through as a silent `Ok`.) The bonus cannot rescue it:
+    // it only pins the max, so a non-max garbled slot stays invisible.
+    if nonzero.len() >= 2 {
+        return (ocr_scores, Recovery::Flagged);
+    }
+
+    // A single (or zero) non-zero slot: a noisy total need not condemn a clean
+    // lone score (its solve attempt above just failed). Lean on the bonus, which
+    // for one score fully corroborates it (the score IS the max).
     let max_plausible = ocr_scores
         .iter()
         .copied()
@@ -1200,6 +1214,17 @@ mod tests {
             rows, recovered, best_effort, stayed, mism.len()
         );
         assert!(mism.is_empty(), "{} unexpected mismatches", mism.len());
+    }
+
+    #[test]
+    fn test_multi_score_unsatisfiable_total_flags_not_ok() {
+        // Run 20260629_014136 it200 (false positive): every score lost 3-4 digits,
+        // so no candidate reaches the truth and the (correct) total 4,315,292 is
+        // unsatisfiable. A multi-score row that contradicts a usable total must
+        // FLAG, not silently accept the garbage as `Ok`.
+        let (scores, rec) = reconcile_stage([1383, 64377, 364], Some(4315292), None);
+        assert_eq!(scores, [1383, 64377, 364]); // unchanged (best-effort)
+        assert_eq!(rec, Recovery::Flagged);
     }
 
     #[test]
