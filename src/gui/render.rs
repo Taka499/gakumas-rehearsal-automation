@@ -494,11 +494,13 @@ pub fn render_review_window_contents(
 
     // Dynamic column sizing: the cells fill the window width and grow when the
     // window is widened (no fixed 72px cap). Reserve room for the leading "#"
-    // column and the trailing 状態/📷 cluster, split the rest over the nine
-    // score cells, and clamp so cells stay readable but never absurdly wide.
+    // column and the trailing cluster (状態 badge + the ✓ verify button + the 📷
+    // expand button), split the rest over the nine score cells, and clamp so
+    // cells stay readable but never absurdly wide.
     let iter_w = 44.0_f32; // fits "1000"
+    let trailing_w = 200.0_f32; // 状態 badge + ✓ + 📷 (must fit all three)
     let avail_w = ui.available_width();
-    let cell_w = ((avail_w - iter_w - 150.0) / 9.0).clamp(60.0, 160.0);
+    let cell_w = ((avail_w - iter_w - trailing_w) / 9.0).clamp(60.0, 160.0);
     let sp = ui.spacing().item_spacing.x;
     // A stage's three cells laid out in a `ui.horizontal` span 3 cells + 2 gaps.
     // The per-stage crop below uses this exact width so it sits flush under them.

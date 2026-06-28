@@ -43,7 +43,8 @@ Use timestamps when you check items off, e.g. `- [x] (2026-06-29 14:00Z) ...`.
 
 ## Surprises & Discoveries
 
-- (none yet)
+- Observation (M4 manual check): adding the per-row "✓" button pushed the "📷" expand button off the right edge of the row. The table's cell width is computed by reserving a fixed trailing width for the `状態` badge + buttons cluster (`render_review_window_contents`), and that reserve was `150.0`, sized for only the badge + 📷. The new button overflowed it, so the row clipped the 📷 (it looked like a fixed-width, non-responsive row). Fix: raised the reserve to `trailing_w = 200.0` so all three (badge + ✓ + 📷) fit; the nine score cells still size dynamically from the remainder (clamped 60–160px).
+  Evidence: user screenshot of run `20260629_014136` iter 181 showing "flagged ✓" with the 📷 cut off at the window edge.
 
 
 ## Decision Log
