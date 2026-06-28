@@ -23,11 +23,13 @@ pub struct ReviewState {
     /// per-status toggles below (search still narrows).
     pub show_all: bool,
     /// Per-status visibility toggles. Default: flagged + repaired on, ok + manual
-    /// off (the attention-needed rows). Combined with `search` (logical AND).
+    /// + verified off (the attention-needed rows). Combined with `search` (AND).
     pub show_ok: bool,
     pub show_repaired: bool,
     pub show_flagged: bool,
     pub show_manual: bool,
+    /// Rows the user reviewed and confirmed correct without editing (resolved).
+    pub show_verified: bool,
     /// Live substring filter over the score cells + iteration (Ctrl+F style).
     /// Independent of the status toggles, so it persists as they change.
     pub search: String,
@@ -48,6 +50,7 @@ impl std::fmt::Debug for ReviewState {
             .field("rows", &self.rows.len())
             .field("show_flagged", &self.show_flagged)
             .field("show_repaired", &self.show_repaired)
+            .field("show_verified", &self.show_verified)
             .field("search", &self.search)
             .field("dirty", &self.dirty)
             .field("open", &self.open)

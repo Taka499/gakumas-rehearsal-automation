@@ -122,6 +122,9 @@ pub struct ReviewActions {
     pub close: bool,
     /// A row's 📷 was clicked: toggle that iteration's expanded inline crops.
     pub toggle_expand: Option<u32>,
+    /// A row's ✓ was clicked: mark that iteration `verified` (resolve a correct
+    /// flagged/repaired row without changing its values).
+    pub mark_verified: Option<u32>,
 }
 
 /// Renders the entire third column as a single state-driven panel: only the
@@ -384,6 +387,7 @@ fn recovery_color(recovery: &str) -> Color32 {
         "ok" => Color32::from_rgb(0, 150, 0),
         "repaired" => Color32::from_rgb(0, 120, 200),
         "manual" => Color32::from_rgb(150, 0, 150),
+        "verified" => Color32::from_rgb(0, 160, 130), // teal: human-confirmed
         _ => Color32::from_rgb(200, 60, 0), // flagged / unknown
     }
 }
@@ -407,6 +411,7 @@ pub fn render_review_window_contents(
         status_chk(ui, &mut review.show_repaired, "repaired");
         status_chk(ui, &mut review.show_ok, "ok");
         status_chk(ui, &mut review.show_manual, "manual");
+        status_chk(ui, &mut review.show_verified, "verified");
         ui.checkbox(&mut review.show_all, "すべて表示");
         ui.separator();
         // Live substring search over the score cells + iteration (Ctrl+F style).
@@ -440,6 +445,7 @@ pub fn render_review_window_contents(
                     "repaired" => review.show_repaired,
                     "flagged" => review.show_flagged,
                     "manual" => review.show_manual,
+                    "verified" => review.show_verified,
                     _ => review.show_ok, // "ok" and any legacy/blank value
                 };
             if !status_on {
@@ -547,6 +553,18 @@ pub fn render_review_window_contents(
                     }
                     let rec = review.rows[i].recovery.clone();
                     ui.label(RichText::new(&rec).color(recovery_color(&rec)).small());
+                    // Resolve a correct-but-flagged (or repaired) row: mark it
+                    // `verified` without touching its values. Not offered for
+                    // already-resolved (ok/manual/verified) rows.
+                    if rec == "flagged" || rec == "repaired" {
+                        if ui
+                            .small_button("✓")
+                            .on_hover_text("確認済みにする（値はそのまま）")
+                            .clicked()
+                        {
+                            actions.mark_verified = Some(iteration);
+                        }
+                    }
                     let label = if expanded { "📷✓" } else { "📷" };
                     if ui
                         .button(label)

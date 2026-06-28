@@ -33,10 +33,10 @@ State these to yourself; the implementation depends on them. They are establishe
 
 ## Progress
 
-- [ ] M1 — Data layer: add `RECOVERY_VERIFIED` constant and document the new state in `src/automation/results_edit.rs`; add a round-trip test proving a `verified` row loads and saves unchanged. (completed: —; remaining: all)
-- [ ] M2 — GUI state: add `show_verified: bool` to `ReviewState` (`src/gui/state.rs`), initialise it (`false`) in `handle_open_review` (`src/gui/mod.rs`), and add it to the hand-written `Debug`. (remaining: all)
-- [ ] M3 — GUI render + action: add a `verified` badge colour, a "verified" filter checkbox, a filter match arm, a per-row "✓" verify button (shown for `flagged`/`repaired` rows), and a `mark_verified: Option<u32>` field on `ReviewActions`; dispatch it in `src/gui/mod.rs`. (remaining: all)
-- [ ] M4 — Build, run, and manually verify the end-to-end behaviour on a real session with a flagged row; update this plan's Outcomes. (remaining: all)
+- [x] (2026-06-29) M1 — Data layer: added `RECOVERY_VERIFIED = "verified"` + doc in `src/automation/results_edit.rs`; new test `test_verified_recovery_roundtrips` proves a `verified` row load→save→load unchanged. `cargo test results_edit` → 5 passed.
+- [x] (2026-06-29) M2 — GUI state: added `show_verified: bool` to `ReviewState` (`src/gui/state.rs`) + `Debug` field + comment; initialised `false` in `handle_open_review` (`src/gui/mod.rs`).
+- [x] (2026-06-29) M3 — GUI render + action: `recovery_color` teal `verified` arm; "verified" filter checkbox + filter match arm; per-row "✓" button on `flagged`/`repaired` rows; `ReviewActions::mark_verified: Option<u32>`; dispatch in `src/gui/mod.rs` (sets `recovery=verified`, `dirty=true`). `cargo test` → 110 passed, no errors.
+- [ ] M4 — Build done; **manual GUI click-through pending** (build via `scripts/build.ps1 -Kill` succeeded). Remaining: run the app, open review on a session with a flagged row, click ✓ → 保存 → reopen, confirm `verified` badge + CSV column + scores unchanged. (The interactive step is manual per the project's tray-GUI testing policy.)
 
 Use timestamps when you check items off, e.g. `- [x] (2026-06-29 14:00Z) ...`.
 
@@ -67,7 +67,7 @@ Use timestamps when you check items off, e.g. `- [x] (2026-06-29 14:00Z) ...`.
 
 ## Outcomes & Retrospective
 
-- (to be written at completion)
+- (2026-06-29) M1–M3 landed; the `verified` state exists end-to-end in code and is unit-tested (data-layer round-trip; full suite 110 passed, no regression). M4's automated portion (release build) is green; the interactive click-through is the only remaining step and is inherently manual (the tray GUI cannot be driven from `cargo test`). What now works that did not before: a `flagged`/`repaired` row in the review window shows a "✓" button; clicking it marks the row `verified` (teal badge) and dirties the window; saving writes `verified` to `results.csv` with the nine scores untouched; the row leaves the default attention view because the new "verified" filter defaults off. The change is additive — no existing recovery value, field, or signature was removed, so prior behaviour (ok/repaired/flagged/manual, edit→manual) is unaffected.
 
 
 ## Context and Orientation

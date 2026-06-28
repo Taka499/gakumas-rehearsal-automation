@@ -26,12 +26,19 @@ pub struct ReviewRow {
     pub screenshot: String,
     /// The nine per-character scores: `[stage][slot]`.
     pub scores: [[u32; 3]; 3],
-    /// `ok` / `repaired` / `flagged` / `manual` (the last set when hand-edited).
+    /// `ok` / `repaired` / `flagged` / `manual` / `verified`. `manual` is set when
+    /// a row is hand-edited; `verified` when the user reviews an auto-recovered
+    /// (flagged/repaired) row, confirms it is correct, and clears it without
+    /// changing any value.
     pub recovery: String,
 }
 
 /// The recovery marker written for a row the user corrected by hand.
 pub const RECOVERY_MANUAL: &str = "manual";
+
+/// The recovery marker for a flagged/repaired row the user reviewed and confirmed
+/// correct without editing it (resolves the flag while preserving the data).
+pub const RECOVERY_VERIFIED: &str = "verified";
 
 const CSV_HEADER: &str =
     "iteration,timestamp,screenshot,s1c1,s1c2,s1c3,s2c1,s2c2,s2c3,s3c1,s3c2,s3c3,recovery";
@@ -207,6 +214,22 @@ mod tests {
         let raw = std::fs::read_to_string(raw_path(dir.path())).unwrap();
         let line2 = raw.lines().nth(1).unwrap();
         assert_eq!(line2, "206174,1032,48189,206174,1032249,1048189,11,22,33");
+    }
+
+    #[test]
+    fn test_verified_recovery_roundtrips() {
+        // A row marked `verified` (user confirmed a flagged row is correct without
+        // editing it) must load and re-save with that marker unchanged.
+        let dir = tempdir().unwrap();
+        let csv = "iteration,timestamp,screenshot,s1c1,s1c2,s1c3,s2c1,s2c2,s2c3,s3c1,s3c2,s3c3,recovery\n\
+                   1,2026-06-29T01:00:00,C:\\out\\001.png,848392,1340813,1026578,1,2,3,4,5,6,verified\n";
+        std::fs::write(results_path(dir.path()), csv).unwrap();
+        let rows = load_review_rows(dir.path()).unwrap();
+        assert_eq!(rows[0].recovery, RECOVERY_VERIFIED);
+        save_review_rows(dir.path(), &rows).unwrap();
+        let again = load_review_rows(dir.path()).unwrap();
+        assert_eq!(again[0].recovery, "verified");
+        assert_eq!(again[0].scores[0], [848392, 1340813, 1026578]);
     }
 
     #[test]

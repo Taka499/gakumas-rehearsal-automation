@@ -19,7 +19,9 @@ use crate::automation::runner::{
     extend_automation, get_last_outcome, is_automation_running, resume_automation, start_automation,
     AutomationOutcome,
 };
-use crate::automation::results_edit::{load_review_rows, save_review_rows, ReviewRow, RECOVERY_MANUAL};
+use crate::automation::results_edit::{
+    load_review_rows, save_review_rows, ReviewRow, RECOVERY_MANUAL, RECOVERY_VERIFIED,
+};
 use crate::automation::state::request_abort;
 
 use render::ReviewActions;
@@ -558,6 +560,7 @@ impl GuiApp {
                     show_repaired: true,
                     show_flagged: true,
                     show_manual: false,
+                    show_verified: false,
                     search: String::new(),
                     dirty: false,
                     preview: None,
@@ -696,6 +699,15 @@ impl GuiApp {
             };
             if expand {
                 self.load_review_preview(ctx, iter);
+            }
+        }
+        if let Some(iter) = actions.mark_verified {
+            if let Some(review) = self.state.review.as_mut() {
+                if let Some(row) = review.rows.iter_mut().find(|r| r.iteration == iter) {
+                    row.recovery = RECOVERY_VERIFIED.to_string();
+                    review.dirty = true;
+                    crate::log(&format!("GUI: Marked iteration {} verified", iter));
+                }
             }
         }
         if actions.save {
