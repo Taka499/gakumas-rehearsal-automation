@@ -39,6 +39,36 @@ pub enum Recovery {
 /// (and revisit the bonus/total guards) if scores ever exceed it.
 const MAX_SCORE: u32 = 3_000_000;
 
+/// How a candidate value was derived from the raw OCR value — its corruption
+/// provenance. Centralising this (rather than re-inferring "was a million
+/// restored?" from magnitudes at each use site, as the code used to) is what lets
+/// the cost model and the physical-validity guard agree on what kind of edit each
+/// candidate represents, and is the seam through which new corruption modes are
+/// added in one place.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BaseKind {
+    /// The raw OCR value, high-order digits unchanged.
+    Raw,
+    /// A dropped leading "1," (or "2,") restored: `raw + d*1_000_000`. The classic
+    /// overlap victim (incl. the leading-zero-group case `062,741` -> `1,062,741`).
+    /// Only physically valid at a junction — its left neighbour must be >= 1M.
+    Million,
+    /// A dropped leading *non-million* digit restored by prepending it at the next
+    /// decimal place, e.g. `52,517` -> `852,517` (the "leading 8" failure), or the
+    /// impossible-7-digit `1,`->`4` substitution `4,177,174` -> `1,177,174`. A
+    /// plain OCR drop/substitution, position-independent (no junction required).
+    Prepend,
+}
+
+/// A candidate value for one slot, tagged with its provenance and whether its
+/// units digit was changed relative to the raw value.
+#[derive(Clone, Copy)]
+struct Cand {
+    value: u32,
+    kind: BaseKind,
+    units_edited: bool,
+}
+
 /// Reconstructs one stage's three per-character scores from the OCR'd scores
 /// plus the optional stage total and bonus.
 ///
@@ -73,14 +103,22 @@ pub fn reconcile_stage(
     });
 
     let Some(total) = total_ok else {
+        // No usable total. Before giving up, try a bonus-driven repair: the bonus
+        // pins floor(max/5), so a unique physically-valid leading-"1" restore that
+        // makes the restored slot the max with floor(max/5) == bonus is strong
+        // evidence (kept best-effort / Flagged since the bonus can't verify the
+        // non-max slots). Otherwise fall back to the conservative structural pass.
+        if let Some(rep) = bonus_driven_repair(ocr_scores, bonus_ok) {
+            return (rep, Recovery::Flagged);
+        }
         return structural_only(ocr_scores, total_provided, bonus_ok);
     };
 
     // --- Steps 2–3: build candidates and collect checksum-satisfying combos. ---
     let cand = [
-        candidates(ocr_scores[0]),
-        candidates(ocr_scores[1]),
-        candidates(ocr_scores[2]),
+        slot_candidates(ocr_scores[0]),
+        slot_candidates(ocr_scores[1]),
+        slot_candidates(ocr_scores[2]),
     ];
 
     // The OCR'd total may carry one spuriously-inserted digit (the thousands
@@ -94,13 +132,15 @@ pub fn reconcile_stage(
         for &a in &cand[0] {
             for &b in &cand[1] {
                 for &c in &cand[2] {
-                    let combo = [a, b, c];
-                    if !physically_valid(combo, ocr_scores) {
+                    let combo = [a.value, b.value, c.value];
+                    let kinds = [a.kind, b.kind, c.kind];
+                    if !physically_valid(combo, kinds) {
                         continue;
                     }
-                    let max = a.max(b).max(c);
-                    if a + b + c + max / 5 == t {
-                        solutions.push((combo, cost(combo, ocr_scores) + penalty));
+                    let max = combo[0].max(combo[1]).max(combo[2]);
+                    if combo[0] + combo[1] + combo[2] + max / 5 == t {
+                        let units = [a.units_edited, b.units_edited, c.units_edited];
+                        solutions.push((combo, cost(kinds, units) + penalty));
                     }
                 }
             }
@@ -108,9 +148,13 @@ pub fn reconcile_stage(
     }
 
     // --- Step 5 (zero solutions): the total was subtly wrong, or the stage is a
-    // single character whose total/bonus mis-OCR'd. Resolve via the
-    // non-collision-prone fallback rather than reflexively flagging. ---
+    // single character whose total/bonus mis-OCR'd. Try a bonus-driven repair
+    // first (a unique leading-"1" restore the bonus corroborates), then the
+    // non-collision-prone fallback, rather than reflexively flagging. ---
     if solutions.is_empty() {
+        if let Some(rep) = bonus_driven_repair(ocr_scores, bonus_ok) {
+            return (rep, Recovery::Flagged);
+        }
         return resolve_without_checksum(ocr_scores, total_set, bonus_ok);
     }
 
@@ -167,23 +211,59 @@ pub fn reconcile_stage(
     (chosen, recovery)
 }
 
-/// Rejects physically-impossible reconstructions. A slot counts as "restored"
-/// (had a dropped leading digit) when its raw value was < 1,000,000 but the
-/// reconstructed value is >= 1,000,000. Per invariants 2–3 a leading digit is
-/// only ever dropped at a collision between two adjacent >= 1,000,000 scores, so:
-///   - the leftmost slot can never be restored (it has no left neighbour), and
-///   - a restored slot's left neighbour must itself be >= 1,000,000.
+/// Rejects physically-impossible reconstructions. A `Million` restore (a dropped
+/// leading "1,"/"2,") only ever happens at a collision between two adjacent
+/// >= 1,000,000 scores (invariants 2–3), so:
+///   - the leftmost slot can never be `Million`-restored (no left neighbour), and
+///   - a `Million`-restored slot's left neighbour must itself be >= 1,000,000.
 /// This eliminates spurious million-trades (e.g. reading `…,1200000,1100000` as
-/// `…,200000,2100000`, which would require restoring a slot whose left neighbour
-/// is sub-million).
-fn physically_valid(combo: [u32; 3], raw: [u32; 3]) -> bool {
+/// `…,200000,2100000`). A `Prepend` restore is a plain leading-digit drop, not a
+/// junction artifact, so it carries no neighbour constraint.
+fn physically_valid(combo: [u32; 3], kinds: [BaseKind; 3]) -> bool {
     for i in 0..3 {
-        let restored = raw[i] < 1_000_000 && combo[i] >= 1_000_000;
-        if restored && (i == 0 || combo[i - 1] < 1_000_000) {
+        if kinds[i] == BaseKind::Million && (i == 0 || combo[i - 1] < 1_000_000) {
             return false;
         }
     }
     true
+}
+
+/// Best-effort repair driven by the bonus when the exact-total checksum found no
+/// solution (the total mis-OCR'd). The bonus equals `floor(max/5)`, so if exactly
+/// one physically-valid leading-"1"/"2" restore makes the restored slot the max
+/// with `floor(max/5) == bonus`, apply it (leaving the other slots raw). Returns
+/// the repaired combo, or `None` if zero or several candidates qualify.
+///
+/// Always best-effort (the caller marks it `Flagged`): the bonus only pins the
+/// max, so a units corruption on a *non-max* slot cannot be fixed here — it just
+/// gets the obvious collision victim restored, which is far closer to truth than
+/// keeping the sub-million raw, and a human still reviews the flagged row.
+fn bonus_driven_repair(raw: [u32; 3], bonus: Option<u32>) -> Option<[u32; 3]> {
+    let bonus = bonus?;
+    let mut hit: Option<[u32; 3]> = None;
+    for i in 0..3 {
+        // Only a junction million-restore: a sub-million slot (not the leftmost)
+        // whose left neighbour is >= 1M (a real collision partner).
+        if i == 0 || !(1_000..1_000_000).contains(&raw[i]) || raw[i - 1] < 1_000_000 {
+            continue;
+        }
+        for d in 1..=2u32 {
+            let restored = raw[i] + d * 1_000_000;
+            if restored >= MAX_SCORE {
+                break;
+            }
+            let mut combo = raw;
+            combo[i] = restored;
+            let max = combo[0].max(combo[1]).max(combo[2]);
+            if max == restored && max / 5 == bonus {
+                if hit.is_some() && hit != Some(combo) {
+                    return None; // ambiguous — refuse to guess
+                }
+                hit = Some(combo);
+            }
+        }
+    }
+    hit
 }
 
 /// `floor(max(combo) / 5)` — the bonus the game would render for this combo.
@@ -191,96 +271,89 @@ fn derived_bonus(combo: [u32; 3]) -> u32 {
     combo.iter().copied().max().unwrap_or(0) / 5
 }
 
-/// Builds the candidate value set for one slot (ExecPlan step 2).
-///
-/// Always includes the raw value. If the raw is a plausible victim of a dropped
-/// leading digit (>= 1000 and < 1,000,000), also includes raw + d*1,000,000 for
-/// each leading digit `d` that keeps the result below `MAX_SCORE` (d = 1 for a
-/// `1,XXX,XXX` victim, d = 2 for a `2,XXX,XXX` one). For every base >= 100,000,
-/// includes the ten units-digit variants (covers the corrupted left-units
-/// digit). Generated variants are capped to < `MAX_SCORE`; the raw is always
+/// Builds the provenance-tagged candidate set for one slot (ExecPlan step 2,
+/// generalised). Each base value is paired with its [`BaseKind`]; for every base
+/// >= 100,000 the ten units-digit variants are added (covers the corrupted
+/// left-units digit). All values are capped to < `MAX_SCORE`; the raw is always
 /// kept (so a clean read above the cap still survives). A dash slot (0)
-/// contributes only {0}.
-fn candidates(v: u32) -> Vec<u32> {
+/// contributes only `{0}`. The bases are:
+///   - `Raw`: the OCR value itself.
+///   - `Million`: `raw + d*1,000,000` (d = 1,2) when raw is in [1000, 1,000,000)
+///     — a dropped leading "1,"/"2," at a collision (incl. leading-zero-group
+///     victims like 62,741 -> 1,062,741).
+///   - `Prepend`: a dropped *non-million* leading digit restored at the next
+///     decimal place, `d*10^len(raw) + raw` (d = 1..9), when raw is in
+///     [1000, 100,000) — e.g. the "leading 8" drop 52,517 -> 852,517. Distinct in
+///     value from `Million` (which always adds >= 1,000,000), so the two never
+///     collide. Also covers the impossible-7-digit "1,"->"4" substitution
+///     (4,177,174 -> 1,177,174 / 2,177,174), which needs no junction neighbour.
+fn slot_candidates(v: u32) -> Vec<Cand> {
     if v == 0 {
-        return vec![0];
+        return vec![Cand { value: 0, kind: BaseKind::Raw, units_edited: false }];
     }
+    let raw_units = v % 10;
 
-    let mut bases = vec![v];
+    let mut bases: Vec<(u32, BaseKind)> = vec![(v, BaseKind::Raw)];
     if (1_000..1_000_000).contains(&v) {
-        for d in 1..=9u32 {
-            let restored = v + d * 1_000_000;
-            if restored >= MAX_SCORE {
+        for d in 1..=2u32 {
+            let r = v + d * 1_000_000;
+            if r >= MAX_SCORE {
                 break;
             }
-            bases.push(restored);
+            bases.push((r, BaseKind::Million));
         }
     }
-    // An impossible seven-digit value (>= MAX_SCORE, i.e. leading digit 3..9) is a
-    // leading-"1"->"4" (or similar) glyph misread of a `1,XXX,XXX` / `2,XXX,XXX`
-    // score. This happens even on a lone character with no overlap neighbour: the
-    // "1," pair (leading one followed by the thousands comma) reads as a single
-    // "4". Offer the leading-digit-replacement repairs (1 or 2 + the surviving
-    // six-digit tail); the exact checksum picks the right one. Bases below
-    // MAX_SCORE flow through the units-variant expansion below like any other.
+    if (1_000..100_000).contains(&v) {
+        let place = 10u32.pow(v.to_string().len() as u32);
+        for d in 1..=9u32 {
+            let r = d * place + v;
+            if r >= MAX_SCORE {
+                break;
+            }
+            bases.push((r, BaseKind::Prepend));
+        }
+    }
     if (MAX_SCORE..10_000_000).contains(&v) {
         let tail = v % 1_000_000;
-        bases.push(1_000_000 + tail);
-        bases.push(2_000_000 + tail);
+        bases.push((1_000_000 + tail, BaseKind::Prepend));
+        bases.push((2_000_000 + tail, BaseKind::Prepend));
     }
 
-    let mut out = vec![v];
-    for &b in &bases {
-        if b < MAX_SCORE {
-            out.push(b);
+    let mut out: Vec<Cand> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut push = |out: &mut Vec<Cand>, value: u32, kind: BaseKind| {
+        if value < MAX_SCORE && seen.insert((value, kind as u8)) {
+            out.push(Cand { value, kind, units_edited: value % 10 != raw_units });
         }
+    };
+    for (b, kind) in bases {
+        push(&mut out, b, kind);
         if b >= 100_000 {
             let floor10 = (b / 10) * 10;
             for d in 0..=9u32 {
-                let variant = floor10 + d;
-                if variant < MAX_SCORE {
-                    out.push(variant);
-                }
+                push(&mut out, floor10 + d, kind);
             }
         }
     }
-
-    out.sort_unstable();
-    out.dedup();
     out
 }
 
-/// Corruption-aware cost of a reconstructed combo relative to the raw OCR
-/// (ExecPlan step 4). NOT a plain edit count: per invariant 3, an overlap
-/// restores a leading million on the RIGHT operand of a junction and corrupts
-/// only the units digit of its LEFT neighbour. So:
-///   - +1 for each slot given a restored leading million,
-///   - a units-digit change costs +1 only when the slot is immediately LEFT of
-///     a restored slot (the expected victim), else +3.
-fn cost(chosen: [u32; 3], raw: [u32; 3]) -> u32 {
-    let restored = [
-        raw[0] < 1_000_000 && chosen[0] >= 1_000_000,
-        raw[1] < 1_000_000 && chosen[1] >= 1_000_000,
-        raw[2] < 1_000_000 && chosen[2] >= 1_000_000,
-    ];
-
+/// Corruption-aware cost of a reconstructed combo (ExecPlan step 4). NOT a plain
+/// edit count: per invariant 3, an overlap restores a leading million on the
+/// RIGHT operand of a junction and corrupts only the units digit of its LEFT
+/// neighbour. So:
+///   - +1 for each restored slot (`Million` or `Prepend`),
+///   - a units-digit change costs +1 only when the slot is immediately LEFT of a
+///     `Million`-restored slot (the expected junction victim), else +3.
+fn cost(kinds: [BaseKind; 3], units_edited: [bool; 3]) -> u32 {
     let mut c = 0u32;
     for i in 0..3 {
-        if restored[i] {
+        if kinds[i] != BaseKind::Raw {
             c += 1;
         }
-        if chosen[i] % 10 != raw[i] % 10 {
-            let left_of_restored = i + 1 < 3 && restored[i + 1];
-            c += if left_of_restored { 1 } else { 3 };
-        }
-        // A leading-digit replacement on a >= 1M value (e.g. an impossible
-        // 4,177,174 repaired to 1,177,174) is a real edit; charge it so the
-        // result is reported `Repaired`, not a cost-0 `Ok`.
-        if chosen[i] >= 1_000_000
-            && raw[i] >= 1_000_000
-            && chosen[i] / 1_000_000 != raw[i] / 1_000_000
-        {
-            c += 1;
+        if units_edited[i] {
+            let left_of_junction = i + 1 < 3 && kinds[i + 1] == BaseKind::Million;
+            c += if left_of_junction { 1 } else { 3 };
         }
     }
     c
@@ -740,8 +813,13 @@ mod tests {
             let max = combo.iter().copied().max().unwrap();
             assert_eq!(combo[0] + combo[1] + combo[2] + max / 5, 2744700);
         }
-        // Plain edit count ties them; the asymmetric cost does not.
-        assert!(cost(correct, raw) < cost(wrong, raw));
+        // Plain edit count ties them; the asymmetric cost does not. Both edit
+        // slot 0's units; the correct combo charges that as the junction victim
+        // (+1, left of the Million-restored slot 1), the wrong combo edits the
+        // restored slot's own units instead (+3).
+        let correct_cost = cost([BaseKind::Raw, BaseKind::Million, BaseKind::Raw], [true, false, false]);
+        let wrong_cost = cost([BaseKind::Raw, BaseKind::Million, BaseKind::Raw], [false, true, false]);
+        assert!(correct_cost < wrong_cost);
 
         let (scores, rec) = reconcile_stage(raw, Some(2744700), None);
         assert_eq!(scores, correct);
@@ -1043,15 +1121,95 @@ mod tests {
         assert_eq!(rec, Recovery::Repaired);
     }
 
+    // --- Field-run replay regression harness (run 20260628_071057). ---
+    // Real per-stage OCR inputs (raw scores, total, bonus) extracted from the
+    // session log, paired with the manually-verified ground truth. Proves no
+    // regression on the 1,186 correct stages and measures recovery on the rest.
+    #[test]
+    fn replay_field_run_20260628() {
+        let data = include_str!("testdata/overlap_replay_20260628.csv");
+        // Recovered only via the digit-stream fallback (cross-slot redistribution),
+        // which reconcile_stage alone cannot do; not part of this isolation harness.
+        const DIGIT_STREAM: &[u32] = &[
+            21, 45, 62, 98, 134, 143, 168, 175, 244, 259, 280, 310, 315, 330,
+        ];
+        // Best-effort bucket B: total mis-OCR'd, bonus restores the (max) c2, but a
+        // non-max units corruption can't be fixed — c2 must match truth, c1 may not.
+        const BEST_EFFORT: &[u32] = &[60, 67, 109, 206];
+        // Unrecoverable from these inputs (>= 2 digits absent, or total wrong with a
+        // non-max prepend the bonus can't pin) — must stay at raw, never guess.
+        const STAY_RAW: &[u32] = &[24, 114, 180, 289, 291];
+        let mut mism: Vec<(u32, u32, [u32; 3], [u32; 3], [u32; 3])> = Vec::new();
+        let (mut rows, mut recovered, mut best_effort, mut stayed) = (0, 0, 0, 0);
+        for line in data.lines() {
+            let f: Vec<&str> = line.split(',').collect();
+            if f.len() < 10 {
+                continue;
+            }
+            let p = |i: usize| f[i].parse::<u32>().unwrap();
+            let iter = p(0);
+            let stage = p(1);
+            let raw = [p(2), p(3), p(4)];
+            let opt = |i: usize| match f[i].parse::<i64>().unwrap() {
+                -1 => None,
+                v => Some(v as u32),
+            };
+            let truth = [p(7), p(8), p(9)];
+            rows += 1;
+            let (got, _flag) = reconcile_stage(raw, opt(5), opt(6));
+            if got == truth {
+                if got != raw {
+                    recovered += 1;
+                }
+                continue;
+            }
+            // got != truth: only the documented exceptions are allowed.
+            let max_idx = (0..3).max_by_key(|&i| truth[i]).unwrap();
+            if stage == 2 && DIGIT_STREAM.contains(&iter) {
+                continue; // handled by reconstruct_from_digits in the live pipeline
+            } else if stage == 2 && STAY_RAW.contains(&iter) {
+                if got == raw {
+                    stayed += 1;
+                    continue;
+                }
+            } else if stage == 2 && BEST_EFFORT.contains(&iter) {
+                // The max (collision-victim) slot must be recovered; an unfixable
+                // non-max units digit is tolerated.
+                if got[max_idx] == truth[max_idx] && got != raw {
+                    best_effort += 1;
+                    continue;
+                }
+            }
+            mism.push((iter, stage, raw, got, truth));
+        }
+        for m in &mism {
+            eprintln!(
+                "UNEXPECTED it{} s{}: raw={:?} got={:?} truth={:?}",
+                m.0, m.1, m.2, m.3, m.4
+            );
+        }
+        eprintln!(
+            "replay: {} rows | recovered exactly: {} | best-effort: {} | stay-raw: {} | unexpected: {}",
+            rows, recovered, best_effort, stayed, mism.len()
+        );
+        assert!(mism.is_empty(), "{} unexpected mismatches", mism.len());
+    }
+
     #[test]
     fn test_candidates_include_restore_and_units() {
-        // Leading-zero victim: 62741 must yield 1,062,741 as a candidate.
-        let c = candidates(62741);
+        let vals = |v: u32| -> Vec<u32> { slot_candidates(v).iter().map(|c| c.value).collect() };
+        // Leading-zero victim: 62741 must yield 1,062,741 (Million) as a candidate.
+        let c = vals(62741);
         assert!(c.contains(&62741));
         assert!(c.contains(&1062741));
         // Units variants exist around the restored base.
         assert!(c.contains(&1062740) && c.contains(&1062749));
-        // Capped below 2,000,000.
-        assert!(c.iter().all(|&x| x < MAX_SCORE));
+        // Leading-digit-drop (the "leading 8" failure): 52,517 must yield 852,517
+        // as a Prepend candidate, tagged accordingly.
+        let p = slot_candidates(52517);
+        let eight = p.iter().find(|c| c.value == 852517).expect("852517 candidate");
+        assert_eq!(eight.kind, BaseKind::Prepend);
+        // All candidates capped below MAX_SCORE.
+        assert!(p.iter().all(|c| c.value < MAX_SCORE));
     }
 }
