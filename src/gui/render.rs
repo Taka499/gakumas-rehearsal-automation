@@ -321,6 +321,31 @@ fn render_finished(
         }
     });
     ui.add_space(8.0);
+    // Prompt the user to check rows that still need attention. The count is
+    // cached at run-finish and recomputed after each review save, so it shrinks
+    // as rows are verified/corrected (no per-frame CSV read here).
+    if let Some((flagged, repaired)) = state.attention_counts {
+        if flagged > 0 || repaired > 0 {
+            let (msg, color) = if flagged > 0 {
+                let mut m = format!("⚠ 要確認の行が {}件 あります", flagged);
+                if repaired > 0 {
+                    m.push_str(&format!("（自動修復 {}件）", repaired));
+                }
+                m.push_str("。「結果を確認・修正」で確認してください。");
+                (m, Color32::from_rgb(200, 60, 0))
+            } else {
+                (
+                    format!(
+                        "自動修復された行が {}件 あります。「結果を確認・修正」で確認できます。",
+                        repaired
+                    ),
+                    Color32::from_rgb(0, 120, 200),
+                )
+            };
+            ui.label(RichText::new(msg).color(color).strong());
+            ui.add_space(6.0);
+        }
+    }
     ui.add_enabled_ui(state.latest_session_path.is_some(), |ui| {
         if ui
             .button("📝 結果を確認・修正")

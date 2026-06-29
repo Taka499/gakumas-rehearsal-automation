@@ -232,7 +232,11 @@ impl GuiApp {
                     self.state.latest_session_path = Some(session_path.clone());
 
                     self.state.status =
-                        self.finalize_status(get_last_outcome(), *total, session_path);
+                        self.finalize_status(get_last_outcome(), *total, session_path.clone());
+                    // Cache how many rows still need a human look so the finished
+                    // panel can prompt the user (charts/CSV are final by now).
+                    self.state.attention_counts =
+                        Some(Self::count_attention(&session_path));
                     // The just-finished session should immediately appear in (or
                     // drop out of) the resume picker.
                     self.scan_resumable_sessions();
@@ -523,6 +527,28 @@ impl GuiApp {
         }
     }
 
+    /// Count rows in a finished session that still need attention: `flagged`
+    /// (the reader could not confirm them — a human must look) and `repaired`
+    /// (auto-recovered, worth a glance). Returns `(flagged, repaired)`; `(0, 0)`
+    /// if the CSV is missing or unreadable. Drives the finished-panel prompt.
+    fn count_attention(session_path: &std::path::Path) -> (u32, u32) {
+        match load_review_rows(session_path) {
+            Ok(rows) => {
+                let mut flagged = 0u32;
+                let mut repaired = 0u32;
+                for r in &rows {
+                    match r.recovery.as_str() {
+                        "flagged" => flagged += 1,
+                        "repaired" => repaired += 1,
+                        _ => {}
+                    }
+                }
+                (flagged, repaired)
+            }
+            Err(_) => (0, 0),
+        }
+    }
+
     /// Builds the per-row editable text buffers from a row's scores.
     fn edits_from_rows(rows: &[ReviewRow]) -> Vec<[[String; 3]; 3]> {
         rows.iter()
@@ -639,17 +665,44 @@ impl GuiApp {
                 changed += 1;
             }
         }
-        match save_review_rows(&review.session_path, &review.rows) {
+        let session_path = review.session_path.clone();
+        let saved = match save_review_rows(&session_path, &review.rows) {
             Ok(()) => {
                 review.dirty = false;
                 review.edits = Self::edits_from_rows(&review.rows);
                 crate::log(&format!(
                     "GUI: Saved review edits ({} row(s) marked manual) to {}",
                     changed,
-                    review.session_path.display()
+                    session_path.display()
                 ));
+                true
             }
-            Err(e) => crate::log(&format!("GUI: Failed to save review edits: {}", e)),
+            Err(e) => {
+                crate::log(&format!("GUI: Failed to save review edits: {}", e));
+                false
+            }
+        };
+        // `review` is no longer used past this point, so the borrow on
+        // `self.state.review` is released and we can touch other state.
+        if saved {
+            // Keep the finished-panel prompt's count in step with the saved
+            // recovery flags (a verified/manual row leaves the attention set).
+            self.state.attention_counts = Some(Self::count_attention(&session_path));
+            // Charts derive only from the scores, so regenerate them only when a
+            // score actually changed; a verify-only save leaves them identical.
+            if changed > 0 {
+                crate::log("GUI: Regenerating charts after review edits...");
+                match crate::analysis::generate_analysis_for_session(&session_path) {
+                    Ok((chart_paths, json_path)) => crate::log(&format!(
+                        "GUI: Charts regenerated: {} files, stats: {}",
+                        chart_paths.len(),
+                        json_path.display()
+                    )),
+                    Err(e) => {
+                        crate::log(&format!("GUI: Failed to regenerate charts: {}", e))
+                    }
+                }
+            }
         }
     }
 
@@ -710,7 +763,10 @@ impl GuiApp {
                 }
             }
         }
-        if actions.save {
+        // A verify click persists immediately (no separate 保存 needed). It
+        // routes through the one save path, so an unedited verified row saves as
+        // `verified` while a row also edited this frame wins as `manual`.
+        if actions.save || actions.mark_verified.is_some() {
             self.handle_save_review();
         }
         if actions.close {

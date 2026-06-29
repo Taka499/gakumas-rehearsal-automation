@@ -199,6 +199,10 @@ pub struct GuiState {
     pub selected_resume: Option<usize>,
     /// Open review/edit window for the latest session's OCR results, if any.
     pub review: Option<ReviewState>,
+    /// (flagged, repaired) row counts for `latest_session_path`. Set when a run
+    /// reaches a terminal state and re-computed after each review save, so the
+    /// finished panel can prompt the user to check remaining attention rows.
+    pub attention_counts: Option<(u32, u32)>,
 }
 
 impl Default for GuiState {
@@ -212,6 +216,7 @@ impl Default for GuiState {
             resumable_sessions: Vec::new(),
             selected_resume: None,
             review: None,
+            attention_counts: None,
         }
     }
 }
