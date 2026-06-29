@@ -122,6 +122,9 @@ pub struct ReviewActions {
     pub close: bool,
     /// A row's 📷 was clicked: toggle that iteration's expanded inline crops.
     pub toggle_expand: Option<u32>,
+    /// A row's ✓ was clicked: mark that iteration `verified` (resolve a correct
+    /// flagged/repaired row without changing its values).
+    pub mark_verified: Option<u32>,
 }
 
 /// Renders the entire third column as a single state-driven panel: only the
@@ -318,6 +321,31 @@ fn render_finished(
         }
     });
     ui.add_space(8.0);
+    // Prompt the user to check rows that still need attention. The count is
+    // cached at run-finish and recomputed after each review save, so it shrinks
+    // as rows are verified/corrected (no per-frame CSV read here).
+    if let Some((flagged, repaired)) = state.attention_counts {
+        if flagged > 0 || repaired > 0 {
+            let (msg, color) = if flagged > 0 {
+                let mut m = format!("⚠ 要確認の行が {}件 あります", flagged);
+                if repaired > 0 {
+                    m.push_str(&format!("（自動修復 {}件）", repaired));
+                }
+                m.push_str("。「結果を確認・修正」で確認してください。");
+                (m, Color32::from_rgb(200, 60, 0))
+            } else {
+                (
+                    format!(
+                        "自動修復された行が {}件 あります。「結果を確認・修正」で確認できます。",
+                        repaired
+                    ),
+                    Color32::from_rgb(0, 120, 200),
+                )
+            };
+            ui.label(RichText::new(msg).color(color).strong());
+            ui.add_space(6.0);
+        }
+    }
     ui.add_enabled_ui(state.latest_session_path.is_some(), |ui| {
         if ui
             .button("📝 結果を確認・修正")
@@ -384,6 +412,7 @@ fn recovery_color(recovery: &str) -> Color32 {
         "ok" => Color32::from_rgb(0, 150, 0),
         "repaired" => Color32::from_rgb(0, 120, 200),
         "manual" => Color32::from_rgb(150, 0, 150),
+        "verified" => Color32::from_rgb(0, 160, 130), // teal: human-confirmed
         _ => Color32::from_rgb(200, 60, 0), // flagged / unknown
     }
 }
@@ -407,6 +436,7 @@ pub fn render_review_window_contents(
         status_chk(ui, &mut review.show_repaired, "repaired");
         status_chk(ui, &mut review.show_ok, "ok");
         status_chk(ui, &mut review.show_manual, "manual");
+        status_chk(ui, &mut review.show_verified, "verified");
         ui.checkbox(&mut review.show_all, "すべて表示");
         ui.separator();
         // Live substring search over the score cells + iteration (Ctrl+F style).
@@ -440,6 +470,7 @@ pub fn render_review_window_contents(
                     "repaired" => review.show_repaired,
                     "flagged" => review.show_flagged,
                     "manual" => review.show_manual,
+                    "verified" => review.show_verified,
                     _ => review.show_ok, // "ok" and any legacy/blank value
                 };
             if !status_on {
@@ -488,11 +519,13 @@ pub fn render_review_window_contents(
 
     // Dynamic column sizing: the cells fill the window width and grow when the
     // window is widened (no fixed 72px cap). Reserve room for the leading "#"
-    // column and the trailing 状態/📷 cluster, split the rest over the nine
-    // score cells, and clamp so cells stay readable but never absurdly wide.
+    // column and the trailing cluster (状態 badge + the ✓ verify button + the 📷
+    // expand button), split the rest over the nine score cells, and clamp so
+    // cells stay readable but never absurdly wide.
     let iter_w = 44.0_f32; // fits "1000"
+    let trailing_w = 200.0_f32; // 状態 badge + ✓ + 📷 (must fit all three)
     let avail_w = ui.available_width();
-    let cell_w = ((avail_w - iter_w - 150.0) / 9.0).clamp(60.0, 160.0);
+    let cell_w = ((avail_w - iter_w - trailing_w) / 9.0).clamp(60.0, 160.0);
     let sp = ui.spacing().item_spacing.x;
     // A stage's three cells laid out in a `ui.horizontal` span 3 cells + 2 gaps.
     // The per-stage crop below uses this exact width so it sits flush under them.
@@ -547,6 +580,18 @@ pub fn render_review_window_contents(
                     }
                     let rec = review.rows[i].recovery.clone();
                     ui.label(RichText::new(&rec).color(recovery_color(&rec)).small());
+                    // Resolve a correct-but-flagged (or repaired) row: mark it
+                    // `verified` without touching its values. Not offered for
+                    // already-resolved (ok/manual/verified) rows.
+                    if rec == "flagged" || rec == "repaired" {
+                        if ui
+                            .small_button("✓")
+                            .on_hover_text("確認済みにする（値はそのまま）")
+                            .clicked()
+                        {
+                            actions.mark_verified = Some(iteration);
+                        }
+                    }
                     let label = if expanded { "📷✓" } else { "📷" };
                     if ui
                         .button(label)

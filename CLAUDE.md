@@ -14,6 +14,8 @@ Active ExecPlans (keep their `Progress` sections current; each is self-contained
 - `docs/EXECPLAN_ADDITIONAL_RUNS_AND_PRESETS.md` - add "追加実行" (extend a finished series into the same folder) and 100/200/500/1000 preset run-count buttons. Code-complete (M1–M3); manual acceptance pending. See its Progress section for status.
 - `docs/EXECPLAN_OVERLAP_SCORE_RECOVERY.md` - recover per-character scores when two ≥1,000,000 values overlap in the rehearsal UI (one digit collides; right number's leading "1" is always lost). Uses a structural re-split plus the on-screen `total = c1+c2+c3+bonus` checksum to reconstruct/flag. Not started; see its Progress section.
 - `docs/EXECPLAN_REVIEW_INLINE_STAGE_CROPS.md` - refine the OCR review window: replace the right-hand whole-screenshot preview with inline, expand-on-demand, per-stage crops (character icons + printed scores) placed under each stage's editable columns, sized dynamically to the column-group width. Crop derived from `score_regions` + a configurable `ReviewCropAdjust` offset (so the dev's future horizontal re-layout tracks from one source). Not started; see its Progress section.
+- `docs/EXECPLAN_REVIEW_VERIFIED_STATE.md` - add a `verified` recovery state + per-row "✓" action to the GUI review window, so a correct-but-flagged row can be resolved without editing its values. Complete (M1–M4; manual click-through confirmed 2026-06-30).
+- `docs/EXECPLAN_REVIEW_SAVE_UX.md` - review-save UX: auto-save when a row is verified (✓), regenerate charts after a score-changing save, and show a post-run "N rows need checking" prompt in the finished panel. Complete (M1–M5; manual click-through confirmed 2026-06-30).
 
 
 ## Project Overview

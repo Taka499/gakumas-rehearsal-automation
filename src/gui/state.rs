@@ -23,11 +23,13 @@ pub struct ReviewState {
     /// per-status toggles below (search still narrows).
     pub show_all: bool,
     /// Per-status visibility toggles. Default: flagged + repaired on, ok + manual
-    /// off (the attention-needed rows). Combined with `search` (logical AND).
+    /// + verified off (the attention-needed rows). Combined with `search` (AND).
     pub show_ok: bool,
     pub show_repaired: bool,
     pub show_flagged: bool,
     pub show_manual: bool,
+    /// Rows the user reviewed and confirmed correct without editing (resolved).
+    pub show_verified: bool,
     /// Live substring filter over the score cells + iteration (Ctrl+F style).
     /// Independent of the status toggles, so it persists as they change.
     pub search: String,
@@ -48,6 +50,7 @@ impl std::fmt::Debug for ReviewState {
             .field("rows", &self.rows.len())
             .field("show_flagged", &self.show_flagged)
             .field("show_repaired", &self.show_repaired)
+            .field("show_verified", &self.show_verified)
             .field("search", &self.search)
             .field("dirty", &self.dirty)
             .field("open", &self.open)
@@ -196,6 +199,10 @@ pub struct GuiState {
     pub selected_resume: Option<usize>,
     /// Open review/edit window for the latest session's OCR results, if any.
     pub review: Option<ReviewState>,
+    /// (flagged, repaired) row counts for `latest_session_path`. Set when a run
+    /// reaches a terminal state and re-computed after each review save, so the
+    /// finished panel can prompt the user to check remaining attention rows.
+    pub attention_counts: Option<(u32, u32)>,
 }
 
 impl Default for GuiState {
@@ -209,6 +216,7 @@ impl Default for GuiState {
             resumable_sessions: Vec::new(),
             selected_resume: None,
             review: None,
+            attention_counts: None,
         }
     }
 }
