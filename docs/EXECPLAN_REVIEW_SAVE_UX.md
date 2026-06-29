@@ -43,7 +43,7 @@ State these to yourself; the implementation depends on them. They are establishe
 - [x] (2026-06-30) M2 — Auto-save on verify: dispatch condition widened to `actions.save || actions.mark_verified.is_some()` in `render_review_window`.
 - [x] (2026-06-30) M3 — `handle_save_review` now captures `session_path`/`changed`, and after a successful save recomputes `attention_counts` and (only when `changed > 0`) calls `generate_analysis_for_session`.
 - [x] (2026-06-30) M4 — Finished-panel prompt added to `render_finished`: a flagged-orange "⚠ 要確認の行が N件 あります…（自動修復 M件）" (or blue repaired-only) notice above the review button, gated on `state.attention_counts`.
-- [ ] M5 — Code-complete; `GAKUMAS_NO_MANIFEST=1 cargo test` → 110 passed; release build via `scripts/build.ps1 -Kill` green (1m59s). **Manual GUI click-through pending**: correct a row → charts regenerate; verify a row → persists without 保存; finish a run with a flagged row → prompt shows the count.
+- [x] (2026-06-30) M5 — `GAKUMAS_NO_MANIFEST=1 cargo test` → 110 passed; release build via `scripts/build.ps1 -Kill` green (1m59s). Manual GUI click-through confirmed by the user: correct a row → charts regenerate; verify a row → persists without 保存; finish a run with a flagged row → prompt shows the count. Plan complete.
 
 Use timestamps when you check items off, e.g. `- [x] (2026-06-29 14:00Z) ...`.
 

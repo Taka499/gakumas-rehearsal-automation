@@ -36,7 +36,7 @@ State these to yourself; the implementation depends on them. They are establishe
 - [x] (2026-06-29) M1 — Data layer: added `RECOVERY_VERIFIED = "verified"` + doc in `src/automation/results_edit.rs`; new test `test_verified_recovery_roundtrips` proves a `verified` row load→save→load unchanged. `cargo test results_edit` → 5 passed.
 - [x] (2026-06-29) M2 — GUI state: added `show_verified: bool` to `ReviewState` (`src/gui/state.rs`) + `Debug` field + comment; initialised `false` in `handle_open_review` (`src/gui/mod.rs`).
 - [x] (2026-06-29) M3 — GUI render + action: `recovery_color` teal `verified` arm; "verified" filter checkbox + filter match arm; per-row "✓" button on `flagged`/`repaired` rows; `ReviewActions::mark_verified: Option<u32>`; dispatch in `src/gui/mod.rs` (sets `recovery=verified`, `dirty=true`). `cargo test` → 110 passed, no errors.
-- [ ] M4 — Build done; **manual GUI click-through pending** (build via `scripts/build.ps1 -Kill` succeeded). Remaining: run the app, open review on a session with a flagged row, click ✓ → 保存 → reopen, confirm `verified` badge + CSV column + scores unchanged. (The interactive step is manual per the project's tray-GUI testing policy.)
+- [x] (2026-06-30) M4 — Manual GUI click-through confirmed by the user: opening review on a session with a flagged row, clicking ✓ → reopen shows the `verified` badge with scores unchanged and the row written `verified` in `results.csv`. Plan complete.
 
 Use timestamps when you check items off, e.g. `- [x] (2026-06-29 14:00Z) ...`.
 
