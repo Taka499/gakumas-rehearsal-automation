@@ -608,9 +608,9 @@ pub fn generate_combined_box_plot(
 /// the nine box plots (no per-column statistics text — those are rendered as a live
 /// table in the GUI instead), so it is shorter than the on-disk combined plot.
 const LIVE_PLOT_W: u32 = 1200;
-const LIVE_PLOT_H: u32 = 600;
+const LIVE_PLOT_H: u32 = 620;
 /// Y of the split between the box-plot area and the column-label strip.
-const LIVE_PLOT_SPLIT_Y: u32 = 560;
+const LIVE_PLOT_SPLIT_Y: u32 = 550;
 
 /// Render the combined nine-box distribution into an RGBA8 pixel buffer.
 ///
@@ -647,19 +647,30 @@ pub fn render_live_box_plot_rgba(
             .build_cartesian_2d(0.0f64..9.0f64, y_min..y_max)
             .context("Failed to build live box plot")?;
 
+        // Fonts are sized generously because the 1200px-wide image is scaled down to
+        // the panel width on screen; larger fonts here stay legible after downscaling.
+        // Y-axis ticks use the same "k" abbreviation as the table.
         chart
             .configure_mesh()
             .disable_x_mesh()
             .disable_x_axis()
             .y_desc("Score")
-            .y_label_formatter(&|y| format!("{:.0}", y))
+            .axis_desc_style(("sans-serif", 22))
+            .label_style(("sans-serif", 22))
+            .y_label_formatter(&|y| {
+                if *y >= 1000.0 {
+                    format!("{}k", (y / 1000.0).round() as i64)
+                } else {
+                    format!("{}", y.round() as i64)
+                }
+            })
             .draw()
             .context("Failed to draw live mesh")?;
 
         let labels = [
             "S1C1", "S1C2", "S1C3", "S2C1", "S2C2", "S2C3", "S3C1", "S3C2", "S3C3",
         ];
-        let label_font = ("sans-serif", 16).into_font();
+        let label_font = ("sans-serif", 28, FontStyle::Bold).into_font();
         let chart_left = 80i32; // Match y_label_area_size
         let chart_width = LIVE_PLOT_W as i32 - chart_left - 20; // Total width minus margins
         let box_width_px = chart_width as f64 / 9.0;
@@ -695,7 +706,7 @@ pub fn render_live_box_plot_rgba(
                     (x_center - box_width, col_stats.quartile_1),
                     (x_center + box_width, col_stats.quartile_3),
                 ],
-                box_color.stroke_width(2),
+                box_color.stroke_width(3),
             )))?;
             // Median line
             chart.draw_series(std::iter::once(PathElement::new(
@@ -703,16 +714,16 @@ pub fn render_live_box_plot_rgba(
                     (x_center - box_width, col_stats.median),
                     (x_center + box_width, col_stats.median),
                 ],
-                RGBColor(200, 50, 50).stroke_width(2),
+                RGBColor(200, 50, 50).stroke_width(3),
             )))?;
             // Whiskers
             chart.draw_series(std::iter::once(PathElement::new(
                 vec![(x_center, min_val), (x_center, col_stats.quartile_1)],
-                whisker_color.stroke_width(1),
+                whisker_color.stroke_width(2),
             )))?;
             chart.draw_series(std::iter::once(PathElement::new(
                 vec![(x_center, col_stats.quartile_3), (x_center, max_val)],
-                whisker_color.stroke_width(1),
+                whisker_color.stroke_width(2),
             )))?;
             // Min/max caps
             chart.draw_series(std::iter::once(PathElement::new(
@@ -720,23 +731,24 @@ pub fn render_live_box_plot_rgba(
                     (x_center - cap_width, min_val),
                     (x_center + cap_width, min_val),
                 ],
-                whisker_color.stroke_width(1),
+                whisker_color.stroke_width(2),
             )))?;
             chart.draw_series(std::iter::once(PathElement::new(
                 vec![
                     (x_center - cap_width, max_val),
                     (x_center + cap_width, max_val),
                 ],
-                whisker_color.stroke_width(1),
+                whisker_color.stroke_width(2),
             )))?;
         }
 
         // Column labels (S1C1 ..) in the lower strip, centered under each box. The
         // lower area's local origin (0,0) is its top-left; the box area sits above it.
         for (idx, label) in labels.iter().enumerate() {
+            // Offset left by ~half the (bold, 28px) label width to center under the box.
             let label_x =
-                chart_left + (idx as i32 * chart_width / 9) + (box_width_px as i32 / 2) - 15;
-            lower.draw_text(label, &label_font.color(&BLACK), (label_x, 8))?;
+                chart_left + (idx as i32 * chart_width / 9) + (box_width_px as i32 / 2) - 38;
+            lower.draw_text(label, &label_font.color(&BLACK), (label_x, 12))?;
         }
 
         root.present().context("Failed to render live box plot")?;

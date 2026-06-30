@@ -28,13 +28,15 @@ pub fn abbrev_k(v: f64) -> String {
     }
 }
 
+/// Font size for the live statistics table — large enough to read comfortably.
+const STAT_TABLE_FONT: f32 = 16.0;
+
 /// A single centered table cell, so values sit centered in their equal-width column.
 fn stat_cell(ui: &mut egui::Ui, text: &str, strong: bool) {
-    let rt = if strong {
-        RichText::new(text).strong().small()
-    } else {
-        RichText::new(text).small()
-    };
+    let mut rt = RichText::new(text).size(STAT_TABLE_FONT);
+    if strong {
+        rt = rt.strong();
+    }
     ui.with_layout(
         egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
         |ui| {
