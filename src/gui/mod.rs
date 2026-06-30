@@ -183,6 +183,13 @@ impl GuiApp {
         if app.state.latest_session_path.is_none() {
             app.state.latest_session_path = newest_session_dir();
         }
+        // Seed the live distribution from the most recent session so its figure shows
+        // the last run's data right after launch (the LIVE_SCORES buffer is otherwise
+        // empty in a fresh process). A new run clears the buffer before it starts, so
+        // this never bleeds into a subsequent run.
+        if let Some(path) = &app.state.latest_session_path {
+            crate::automation::runner::reload_live_scores_from_csv(path);
+        }
         app
     }
 
