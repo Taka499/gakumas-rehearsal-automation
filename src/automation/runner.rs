@@ -72,6 +72,16 @@ fn clear_live_scores() {
     }
 }
 
+/// Replaces the live score buffer with the rows currently in a session's CSV.
+///
+/// Used after the review window saves manual corrections or verifications, so the
+/// live distribution figure reflects the fixed/verified values (and re-includes rows
+/// whose `flagged` state was cleared by verification). Safe to call when not running.
+pub fn reload_live_scores_from_csv(session_dir: &Path) {
+    clear_live_scores();
+    seed_live_scores_from_csv(session_dir);
+}
+
 /// Seeds the live score buffer from an existing session's CSV so a resumed/extended
 /// run's live figure reflects the whole series, not just newly-added points. A
 /// missing or unreadable CSV must not abort the run, so errors are logged and the

@@ -118,6 +118,10 @@ pub struct GuiApp {
     /// Included run count and flagged-excluded count for the live figure's heading.
     live_chart_total: usize,
     live_chart_excluded: usize,
+    /// Forces a live-figure re-render on the next frame even if the buffer row count
+    /// is unchanged. Set after a review save so manual corrections / verifications
+    /// (which can change values or flags without changing the row count) are reflected.
+    live_chart_dirty: bool,
     /// Whether the window is currently expanded to make room for the live plot
     /// side panel. Used to resize once on show/hide rather than every frame.
     live_chart_expanded: bool,
@@ -161,6 +165,7 @@ impl GuiApp {
             live_chart_stats: None,
             live_chart_total: 0,
             live_chart_excluded: 0,
+            live_chart_dirty: false,
             // Seed to match the persisted preference so the initial viewport size
             // (chosen in run_gui) is not resized on the first frame.
             live_chart_expanded: settings.show_live_chart,
@@ -312,8 +317,11 @@ impl GuiApp {
         }
 
         let count = crate::automation::runner::live_score_count();
-        if count == self.live_chart_rendered_count && self.live_chart_tex.is_some() {
-            return; // No new data since the last render.
+        if !self.live_chart_dirty
+            && count == self.live_chart_rendered_count
+            && self.live_chart_tex.is_some()
+        {
+            return; // No new data and not force-invalidated since the last render.
         }
 
         let rows = crate::automation::runner::get_live_scores();
@@ -335,6 +343,7 @@ impl GuiApp {
                 self.live_chart_excluded = excluded;
                 self.live_chart_stats = Some(stats);
                 self.live_chart_rendered_count = count;
+                self.live_chart_dirty = false;
             }
             Err(e) => {
                 crate::log(&format!("Live distribution: render failed ({})", e));
@@ -812,6 +821,11 @@ impl GuiApp {
             // Keep the finished-panel prompt's count in step with the saved
             // recovery flags (a verified/manual row leaves the attention set).
             self.state.attention_counts = Some(Self::count_attention(&session_path));
+            // Refresh the live distribution from the saved CSV so the figure and table
+            // reflect the corrected/verified values (verification can re-include a row
+            // whose flag was cleared, which changes the stats without changing scores).
+            crate::automation::runner::reload_live_scores_from_csv(&session_path);
+            self.live_chart_dirty = true;
             // Charts derive only from the scores, so regenerate them only when a
             // score actually changed; a verify-only save leaves them identical.
             if changed > 0 {
@@ -892,6 +906,9 @@ impl GuiApp {
         // `verified` while a row also edited this frame wins as `manual`.
         if actions.save || actions.mark_verified.is_some() {
             self.handle_save_review();
+            // handle_save_review marks the live figure dirty; ensure the main viewport
+            // runs another frame to pick up the refreshed distribution.
+            ctx.request_repaint();
         }
         if actions.close {
             if let Some(r) = self.state.review.as_mut() {
