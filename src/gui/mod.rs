@@ -57,6 +57,12 @@ pub struct GuiApp {
     guide_images: [Option<TextureHandle>; 2],
     /// Flag to track if images have been loaded.
     images_loaded: bool,
+    /// Cached live distribution figure texture, rebuilt while a run is in progress.
+    /// Lives here (not on `GuiState`) because `TextureHandle` is not `Debug`.
+    live_chart_tex: Option<TextureHandle>,
+    /// Live-buffer row count the cached `live_chart_tex` was rendered from; used to
+    /// re-render the figure only when new iteration data has arrived.
+    live_chart_rendered_count: usize,
     /// Tray icon (kept alive for the duration of the app).
     #[allow(dead_code)]
     tray_icon: Option<TrayIcon>,
@@ -84,6 +90,8 @@ impl GuiApp {
             state: GuiState::default(),
             guide_images: [None, None],
             images_loaded: false,
+            live_chart_tex: None,
+            live_chart_rendered_count: 0,
             tray_icon,
             menu_event_receiver,
             exit_requested: false,
@@ -216,6 +224,44 @@ impl GuiApp {
         }
 
         self.images_loaded = true;
+    }
+
+    /// Rebuild the live score-distribution figure into a texture when a run is in
+    /// progress, the user has the figure enabled, and new iteration data has arrived
+    /// since the cached texture was made. Flagged rows are excluded from the figure's
+    /// statistics (kept in the buffer but not plotted) until verified. Cheap on idle
+    /// frames thanks to the row-count guard; only re-renders on a new data point.
+    fn update_live_chart(&mut self, ctx: &egui::Context) {
+        if !(self.state.status.is_running() && self.state.show_live_chart) {
+            return;
+        }
+
+        let count = crate::automation::runner::live_score_count();
+        if count == self.live_chart_rendered_count && self.live_chart_tex.is_some() {
+            return; // No new data since the last render.
+        }
+
+        let rows = crate::automation::runner::get_live_scores();
+        let included: Vec<[[u32; 3]; 3]> = rows
+            .iter()
+            .filter(|r| !r.flagged)
+            .map(|r| r.scores)
+            .collect();
+        let excluded = rows.len() - included.len();
+        let stats = crate::analysis::statistics::DataSetStats::from_score_rows(&included);
+
+        match crate::analysis::charts::render_live_box_plot_rgba(&stats, excluded) {
+            Ok((w, h, rgba)) => {
+                let color =
+                    egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+                let tex = ctx.load_texture("live_box_plot", color, egui::TextureOptions::LINEAR);
+                self.live_chart_tex = Some(tex);
+                self.live_chart_rendered_count = count;
+            }
+            Err(e) => {
+                crate::log(&format!("Live distribution: render failed ({})", e));
+            }
+        }
     }
 
     /// Update automation status by polling the automation runner.
@@ -810,6 +856,9 @@ impl eframe::App for GuiApp {
         // Poll automation status
         self.update_automation_status();
 
+        // Rebuild the live distribution figure when new iteration data has arrived.
+        self.update_live_chart(ctx);
+
         // Request repaint while automation is running (for progress updates)
         if self.state.status.is_running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -845,7 +894,19 @@ impl eframe::App for GuiApp {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            let actions = render::render_control_panel(ui, &mut self.state);
+                            let actions = render::render_control_panel(
+                                ui,
+                                &mut self.state,
+                                self.live_chart_tex.as_ref(),
+                            );
+                            if actions.toggle_live_chart {
+                                self.state.show_live_chart = !self.state.show_live_chart;
+                                if !self.state.show_live_chart {
+                                    // Free the texture and force a re-render next time it is shown.
+                                    self.live_chart_tex = None;
+                                    self.live_chart_rendered_count = 0;
+                                }
+                            }
                             if actions.start { self.handle_start(); }
                             if actions.stop { self.handle_stop(); }
                             if actions.continue_run { self.handle_continue(); }

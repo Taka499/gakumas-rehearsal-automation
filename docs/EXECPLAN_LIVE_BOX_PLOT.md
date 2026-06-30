@@ -24,8 +24,8 @@ You will know it works when: you start an automation run from the GUI, tick a "�
 ## Progress
 
 - [x] (2026-07-01) M1 — Live score buffer plumbed from the OCR worker to a process-global store in `runner.rs`, reset on a fresh run and seeded from the existing CSV on resume/extend, excluding flagged rows. Unit test `live_score_buffer_records_and_excludes_flagged` passes; `cargo check` clean.
-- [ ] M2 — In-memory renderer in `analysis/charts.rs` that draws the nine-box combined figure plus the six-line statistics block under each box into an RGBA pixel buffer (no file I/O), backed by a raw-rows statistics constructor in `analysis/statistics.rs`. (completed: —; remaining: all)
-- [ ] M3 — GUI wiring: a show/hide toggle in the running panel, per-iteration regeneration of the figure into an egui texture in `gui/mod.rs::update`, and display of that texture in `gui/render.rs::render_running`. (completed: —; remaining: all)
+- [x] (2026-07-01) M2 — In-memory renderer `render_live_box_plot_rgba` in `analysis/charts.rs` (nine boxes + six-line stats block per column, RGBA buffer, no file I/O), backed by `DataSetStats::from_score_rows` in `analysis/statistics.rs`. Tests `render_live_box_plot_*`, `group_thousands_*`, `from_score_rows_*` pass; `#[ignore]`d `live_box_plot_preview` produced a clean `temp/live_box_plot_preview.png` (verified visually). `cargo check` clean.
+- [x] (2026-07-01) M3 — GUI wiring code-complete: `show_live_chart` toggle on `GuiState`; `live_chart_tex`/`live_chart_rendered_count` on `GuiApp`; `GuiApp::update_live_chart` rebuilds the texture only when `live_score_count()` changes; "ライブ分布を表示" checkbox + inline `ui.image` in `render_running` (texture threaded through `render_control_panel`). `cargo check` clean, full suite 116 passed, guarded release build OK (1m59s, 28 expected warnings). Remaining: manual click-through against the live game (cannot be automated here — needs `gakumas.exe`).
 
 Use timestamps (UTC) as steps complete, e.g. `- [x] (2026-06-30 14:00Z) M1 done`.
 
@@ -58,7 +58,15 @@ Use timestamps (UTC) as steps complete, e.g. `- [x] (2026-06-30 14:00Z) M1 done`
 
 ## Outcomes & Retrospective
 
-(To be written at completion. Compare delivered behavior against the Purpose: can a user watch the nine-box figure update live during a run, with flagged rows excluded?)
+M1–M3 are code-complete on branch `feature/live-box-plot`. The data path (OCR worker → `LIVE_SCORES` → GUI), the in-memory plotters renderer, and the GUI toggle/display are all in place and unit-tested; the full suite passes (116) and the optimized release build links. The `#[ignore]`d `live_box_plot_preview` test produced a figure that matches the intended design exactly: nine per-stage-colored boxes in one row with an aligned six-line stats block (Avg/Med/Max/Min/Q1/Q3) under each, and a title reporting the run count and flagged-excluded count.
+
+Decisions held up cleanly in implementation:
+
+- Excluding flagged rows is a single `.filter(|r| !r.flagged)` at stats-compute time in `update_live_chart`, with the excluded count surfaced in the figure title — so a flagged iteration visibly does not move the boxes and the user can see why the plotted count trails the iteration counter.
+- Reusing the existing plotters box geometry into an in-memory RGB buffer (then RGB→RGBA for egui) avoided any disk I/O and kept the live figure visually consistent with the on-disk `chart_combined.png`.
+- The row-count guard (`count == live_chart_rendered_count`) makes idle frames free; the figure only re-renders on a genuinely new data point.
+
+Remaining gap: the live click-through against a running `gakumas.exe` cannot be exercised in this environment (no game window, and the live GUI/hotkeys require manual testing per the repo's testing constraints). The manual acceptance steps in "Validation and Acceptance" are the proof to run on the dev machine. The one deliberate, documented behavior difference from the final charts (live excludes flagged; the post-run on-disk charts currently include them) is captured in Surprises & Discoveries.
 
 
 ## Context and Orientation

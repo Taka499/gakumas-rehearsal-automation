@@ -203,6 +203,10 @@ pub struct GuiState {
     /// reaches a terminal state and re-computed after each review save, so the
     /// finished panel can prompt the user to check remaining attention rows.
     pub attention_counts: Option<(u32, u32)>,
+    /// Whether the live score-distribution figure is shown in the running panel.
+    /// The texture itself lives on `GuiApp` (a `TextureHandle` is not `Debug`);
+    /// this is just the user's show/hide preference.
+    pub show_live_chart: bool,
 }
 
 impl Default for GuiState {
@@ -217,6 +221,7 @@ impl Default for GuiState {
             selected_resume: None,
             review: None,
             attention_counts: None,
+            show_live_chart: false,
         }
     }
 }

@@ -111,6 +111,9 @@ pub struct PanelActions {
     pub extend: bool,
     /// Open the OCR result review/edit window for the latest session.
     pub open_review: bool,
+    /// The "ライブ分布を表示" checkbox was toggled this frame (show/hide the live
+    /// score-distribution figure in the running panel).
+    pub toggle_live_chart: bool,
 }
 
 /// Signals collected from the review/edit window in one frame.
@@ -130,7 +133,11 @@ pub struct ReviewActions {
 /// Renders the entire third column as a single state-driven panel: only the
 /// controls relevant to the current automation state are shown. The caller
 /// must wrap this in a vertical ScrollArea so content can never clip.
-pub fn render_control_panel(ui: &mut egui::Ui, state: &mut GuiState) -> PanelActions {
+pub fn render_control_panel(
+    ui: &mut egui::Ui,
+    state: &mut GuiState,
+    live_chart: Option<&TextureHandle>,
+) -> PanelActions {
     let mut actions = PanelActions::default();
     // Clone the status so we can read it while mutating other GuiState fields
     // (the run-count DragValue and the resume combo both borrow state mutably).
@@ -139,7 +146,7 @@ pub fn render_control_panel(ui: &mut egui::Ui, state: &mut GuiState) -> PanelAct
     match &status {
         AutomationStatus::Idle => render_idle(ui, state, &mut actions),
         AutomationStatus::Running { current, total, .. } => {
-            render_running(ui, state, *current, *total, &mut actions)
+            render_running(ui, state, *current, *total, live_chart, &mut actions)
         }
         AutomationStatus::Completed { .. }
         | AutomationStatus::Aborted { .. }
@@ -206,6 +213,7 @@ fn render_running(
     state: &GuiState,
     current: u32,
     total: u32,
+    live_chart: Option<&TextureHandle>,
     actions: &mut PanelActions,
 ) {
     ui.heading(RichText::new("実行中").color(Color32::from_rgb(0, 120, 200)));
@@ -243,6 +251,31 @@ fn render_running(
     ui.add_space(12.0);
     if ui.button(RichText::new("◼ 停止").size(18.0)).clicked() {
         actions.stop = true;
+    }
+
+    // Live score-distribution figure: a checkbox toggle, then (when enabled) the
+    // nine-box plot rendered each time a new iteration's scores land.
+    ui.add_space(12.0);
+    ui.separator();
+    let mut shown = state.show_live_chart;
+    if ui.checkbox(&mut shown, "ライブ分布を表示").changed() {
+        actions.toggle_live_chart = true;
+    }
+    if state.show_live_chart {
+        match live_chart {
+            Some(tex) => {
+                // Scale to the panel width, preserving the figure's aspect ratio.
+                let w = ui.available_width();
+                let size = tex.size();
+                let aspect = size[1] as f32 / size[0] as f32;
+                ui.add_space(4.0);
+                ui.image((tex.id(), Vec2::new(w, w * aspect)));
+            }
+            None => {
+                ui.add_space(4.0);
+                ui.label(RichText::new("分布を準備中…").small().weak());
+            }
+        }
     }
 }
 
