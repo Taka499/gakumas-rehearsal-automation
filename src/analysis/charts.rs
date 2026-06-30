@@ -604,40 +604,23 @@ pub fn generate_combined_box_plot(
     Ok(())
 }
 
-/// Canvas dimensions for the live in-run distribution figure.
+/// Canvas dimensions for the live in-run distribution figure. The figure shows only
+/// the nine box plots (no per-column statistics text — those are rendered as a live
+/// table in the GUI instead), so it is shorter than the on-disk combined plot.
 const LIVE_PLOT_W: u32 = 1200;
-const LIVE_PLOT_H: u32 = 980;
-/// Y of the split between the box-plot area and the labels/statistics strip.
-const LIVE_PLOT_SPLIT_Y: u32 = 650;
+const LIVE_PLOT_H: u32 = 600;
+/// Y of the split between the box-plot area and the column-label strip.
+const LIVE_PLOT_SPLIT_Y: u32 = 560;
 
-/// Insert thousands separators into a non-negative integer (e.g. 284103 -> "284,103").
-/// Local helper so the live figure needs no extra crate.
-fn group_thousands(n: u64) -> String {
-    let s = n.to_string();
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    let len = bytes.len();
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(*b as char);
-    }
-    out
-}
-
-/// Render the combined nine-box distribution plus a six-line statistics block
-/// (Avg, Med, Max, Min, Q1, Q3) under each box, into an RGBA8 pixel buffer.
+/// Render the combined nine-box distribution into an RGBA8 pixel buffer.
 ///
 /// Returns `(width, height, rgba_bytes)` with `rgba_bytes.len() == width*height*4`,
 /// ready for `egui::ColorImage::from_rgba_unmultiplied`. No file is written. This
-/// mirrors `generate_combined_box_plot` (same colors, layout, and box geometry) but
-/// targets an in-memory buffer for the live GUI view and adds the per-column stats
-/// block. `excluded_flagged` is the count of flagged rows omitted from `stats`, shown
-/// in the title so the user understands any gap vs. the iteration counter.
+/// mirrors `generate_combined_box_plot` (same colors and box geometry) but targets an
+/// in-memory buffer for the live GUI view. Per-column statistics are NOT drawn here;
+/// the GUI shows them as a separate live-updating table (see `render_live_stats_table`).
 pub fn render_live_box_plot_rgba(
     stats: &super::statistics::DataSetStats,
-    excluded_flagged: usize,
 ) -> Result<(u32, u32, Vec<u8>)> {
     // plotters BitMapBackend writes RGB (3 bytes/pixel) into this buffer.
     let mut rgb = vec![0u8; (LIVE_PLOT_W * LIVE_PLOT_H * 3) as usize];
@@ -655,15 +638,9 @@ pub fn render_live_box_plot_rgba(
         let y_min = (global_min - range * 0.05).max(0.0);
         let y_max = global_max + range * 0.05;
 
-        let title = format!(
-            "Score Distribution ({} runs, {} flagged excluded)",
-            stats.total_runs, excluded_flagged
-        );
-
         let (upper, lower) = root.split_vertically(LIVE_PLOT_SPLIT_Y);
 
         let mut chart = ChartBuilder::on(&upper)
-            .caption(&title, ("sans-serif", 24))
             .margin(20)
             .x_label_area_size(10)
             .y_label_area_size(80)
@@ -683,7 +660,6 @@ pub fn render_live_box_plot_rgba(
             "S1C1", "S1C2", "S1C3", "S2C1", "S2C2", "S2C3", "S3C1", "S3C2", "S3C3",
         ];
         let label_font = ("sans-serif", 16).into_font();
-        let stat_font = ("sans-serif", 12).into_font();
         let chart_left = 80i32; // Match y_label_area_size
         let chart_width = LIVE_PLOT_W as i32 - chart_left - 20; // Total width minus margins
         let box_width_px = chart_width as f64 / 9.0;
@@ -755,30 +731,12 @@ pub fn render_live_box_plot_rgba(
             )))?;
         }
 
-        // Labels and per-column statistics block in the lower strip. The lower area's
-        // local origin (0,0) is its top-left; the box area sits above it.
-        for (idx, col_stats) in stats.columns.iter().enumerate() {
-            let col_left = chart_left + (idx as i32 * chart_width / 9) + 4;
+        // Column labels (S1C1 ..) in the lower strip, centered under each box. The
+        // lower area's local origin (0,0) is its top-left; the box area sits above it.
+        for (idx, label) in labels.iter().enumerate() {
             let label_x =
                 chart_left + (idx as i32 * chart_width / 9) + (box_width_px as i32 / 2) - 15;
-
-            // Column header (S1C1 ..) on the first row of the strip.
-            lower.draw_text(labels[idx], &label_font.color(&BLACK), (label_x, 5))?;
-
-            // Six statistics, one per line, rounded to whole scores with separators.
-            let rows = [
-                ("Avg", col_stats.mean.round() as u64),
-                ("Med", col_stats.median.round() as u64),
-                ("Max", col_stats.max as u64),
-                ("Min", col_stats.min as u64),
-                ("Q1", col_stats.quartile_1.round() as u64),
-                ("Q3", col_stats.quartile_3.round() as u64),
-            ];
-            for (line, (name, value)) in rows.iter().enumerate() {
-                let y = 34 + (line as i32) * 20;
-                let text = format!("{}: {}", name, group_thousands(*value));
-                lower.draw_text(&text, &stat_font.color(&BLACK), (col_left, y))?;
-            }
+            lower.draw_text(label, &label_font.color(&BLACK), (label_x, 8))?;
         }
 
         root.present().context("Failed to render live box plot")?;
@@ -813,7 +771,7 @@ mod tests {
     #[test]
     fn render_live_box_plot_returns_rgba_buffer() {
         let stats = DataSetStats::from_score_rows(&sample_rows());
-        let (w, h, rgba) = render_live_box_plot_rgba(&stats, 2).unwrap();
+        let (w, h, rgba) = render_live_box_plot_rgba(&stats).unwrap();
         assert_eq!(w, LIVE_PLOT_W);
         assert_eq!(h, LIVE_PLOT_H);
         assert_eq!(rgba.len(), (w * h * 4) as usize);
@@ -825,16 +783,8 @@ mod tests {
     fn render_live_box_plot_handles_empty() {
         // Zero usable rows must not panic (early-run case).
         let stats = DataSetStats::from_score_rows(&[]);
-        let (w, h, rgba) = render_live_box_plot_rgba(&stats, 0).unwrap();
+        let (w, h, rgba) = render_live_box_plot_rgba(&stats).unwrap();
         assert_eq!(rgba.len(), (w * h * 4) as usize);
-    }
-
-    #[test]
-    fn group_thousands_inserts_separators() {
-        assert_eq!(group_thousands(0), "0");
-        assert_eq!(group_thousands(284103), "284,103");
-        assert_eq!(group_thousands(1340813), "1,340,813");
-        assert_eq!(group_thousands(999), "999");
     }
 
     // Eyeball preview: writes the live figure to temp/live_box_plot_preview.png.
@@ -843,7 +793,7 @@ mod tests {
     #[ignore]
     fn live_box_plot_preview() {
         let stats = DataSetStats::from_score_rows(&sample_rows());
-        let (w, h, rgba) = render_live_box_plot_rgba(&stats, 1).unwrap();
+        let (w, h, rgba) = render_live_box_plot_rgba(&stats).unwrap();
         let img = image::RgbaImage::from_raw(w, h, rgba).expect("buffer size matches dimensions");
         std::fs::create_dir_all("temp").ok();
         img.save("temp/live_box_plot_preview.png")
