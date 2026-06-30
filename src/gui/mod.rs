@@ -49,6 +49,15 @@ static EGUI_CTX: OnceLock<egui::Context> = OnceLock::new();
 const GUIDE_IMAGE_1: &[u8] = include_bytes!("../../resources/guide/step1_contest_mode.png");
 const GUIDE_IMAGE_2: &[u8] = include_bytes!("../../resources/guide/step2_rehearsal_page.png");
 
+/// Default window size (controls only, live plot hidden). Matches the viewport
+/// builder in `run_gui`.
+const WINDOW_SIZE_COLLAPSED: Vec2 = Vec2::new(800.0, 580.0);
+/// Window size when the live distribution side panel is shown — wide enough that
+/// the nine-box figure is comfortably readable.
+const WINDOW_SIZE_EXPANDED: Vec2 = Vec2::new(1640.0, 760.0);
+/// Default width of the live-plot side panel.
+const LIVE_PLOT_PANEL_WIDTH: f32 = 820.0;
+
 /// Main GUI application struct.
 pub struct GuiApp {
     /// Application state.
@@ -63,6 +72,9 @@ pub struct GuiApp {
     /// Live-buffer row count the cached `live_chart_tex` was rendered from; used to
     /// re-render the figure only when new iteration data has arrived.
     live_chart_rendered_count: usize,
+    /// Whether the window is currently expanded to make room for the live plot
+    /// side panel. Used to resize once on show/hide rather than every frame.
+    live_chart_expanded: bool,
     /// Tray icon (kept alive for the duration of the app).
     #[allow(dead_code)]
     tray_icon: Option<TrayIcon>,
@@ -92,6 +104,7 @@ impl GuiApp {
             images_loaded: false,
             live_chart_tex: None,
             live_chart_rendered_count: 0,
+            live_chart_expanded: false,
             tray_icon,
             menu_event_receiver,
             exit_requested: false,
@@ -859,9 +872,45 @@ impl eframe::App for GuiApp {
         // Rebuild the live distribution figure when new iteration data has arrived.
         self.update_live_chart(ctx);
 
+        // Grow/shrink the window once when the live plot panel appears/disappears, so
+        // the figure has room to be readable without permanently enlarging the window.
+        let show_live_panel = self.state.show_live_chart && self.live_chart_tex.is_some();
+        if show_live_panel != self.live_chart_expanded {
+            let size = if show_live_panel {
+                WINDOW_SIZE_EXPANDED
+            } else {
+                WINDOW_SIZE_COLLAPSED
+            };
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+            self.live_chart_expanded = show_live_panel;
+        }
+
         // Request repaint while automation is running (for progress updates)
         if self.state.status.is_running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
+        // Live distribution figure: a wide, resizable right-hand side panel, added
+        // before the central panel so it claims the right edge of the window.
+        if show_live_panel {
+            egui::SidePanel::right("live_plot_panel")
+                .resizable(true)
+                .default_width(LIVE_PLOT_PANEL_WIDTH)
+                .min_width(360.0)
+                .show(ctx, |ui| {
+                    ui.add_space(4.0);
+                    ui.heading("スコア分布（ライブ）");
+                    ui.add_space(6.0);
+                    if let Some(tex) = &self.live_chart_tex {
+                        egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                            // Scale to the panel width, preserving the figure's aspect.
+                            let w = ui.available_width();
+                            let size = tex.size();
+                            let aspect = size[1] as f32 / size[0] as f32;
+                            ui.image((tex.id(), Vec2::new(w, w * aspect)));
+                        });
+                    }
+                });
         }
 
         // Main panel
@@ -877,28 +926,19 @@ impl eframe::App for GuiApp {
             );
             ui.add_space(8.0);
 
-            // Three-column layout: image1, image2, controls
-            ui.columns(3, |columns| {
-                // Column 1: First guide image
+            // Two-column layout: rehearsal-page guide, then controls.
+            ui.columns(2, |columns| {
+                // Column 1: rehearsal-page guide image.
                 columns[0].vertical(|ui| {
-                    render::render_guide_image(ui, &self.guide_images[0], "① コンテストで「リハーサル」を選択");
+                    render::render_guide_image(ui, &self.guide_images[1], "① この画面で待機");
                 });
 
-                // Column 2: Second guide image
+                // Column 2: a single state-driven control panel, scrollable so nothing clips.
                 columns[1].vertical(|ui| {
-                    render::render_guide_image(ui, &self.guide_images[1], "② この画面で待機");
-                });
-
-                // Column 3: a single state-driven control panel, scrollable so nothing clips.
-                columns[2].vertical(|ui| {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            let actions = render::render_control_panel(
-                                ui,
-                                &mut self.state,
-                                self.live_chart_tex.as_ref(),
-                            );
+                            let actions = render::render_control_panel(ui, &mut self.state);
                             if actions.start { self.handle_start(); }
                             if actions.stop { self.handle_stop(); }
                             if actions.continue_run { self.handle_continue(); }

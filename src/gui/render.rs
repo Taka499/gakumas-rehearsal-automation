@@ -130,11 +130,7 @@ pub struct ReviewActions {
 /// Renders the entire third column as a single state-driven panel: only the
 /// controls relevant to the current automation state are shown. The caller
 /// must wrap this in a vertical ScrollArea so content can never clip.
-pub fn render_control_panel(
-    ui: &mut egui::Ui,
-    state: &mut GuiState,
-    live_chart: Option<&TextureHandle>,
-) -> PanelActions {
+pub fn render_control_panel(ui: &mut egui::Ui, state: &mut GuiState) -> PanelActions {
     let mut actions = PanelActions::default();
     // Clone the status so we can read it while mutating other GuiState fields
     // (the run-count DragValue and the resume combo both borrow state mutably).
@@ -143,7 +139,7 @@ pub fn render_control_panel(
     match &status {
         AutomationStatus::Idle => render_idle(ui, state, &mut actions),
         AutomationStatus::Running { current, total, .. } => {
-            render_running(ui, state, *current, *total, live_chart, &mut actions)
+            render_running(ui, state, *current, *total, &mut actions)
         }
         AutomationStatus::Completed { .. }
         | AutomationStatus::Aborted { .. }
@@ -158,7 +154,7 @@ pub fn render_control_panel(
 /// Idle: run-count input + Start, then the resume picker only if the on-disk
 /// scan found interrupted sessions.
 fn render_idle(ui: &mut egui::Ui, state: &mut GuiState, actions: &mut PanelActions) {
-    ui.label(RichText::new("③ 回数を設定して開始").strong());
+    ui.label(RichText::new("② 回数を設定して開始").strong());
     ui.add_space(8.0);
 
     render_count_input(ui, "実行回数:", &mut state.iterations);
@@ -218,7 +214,6 @@ fn render_running(
     state: &GuiState,
     current: u32,
     total: u32,
-    live_chart: Option<&TextureHandle>,
     actions: &mut PanelActions,
 ) {
     ui.heading(RichText::new("実行中").color(Color32::from_rgb(0, 120, 200)));
@@ -258,28 +253,16 @@ fn render_running(
         actions.stop = true;
     }
 
-    // Live score-distribution figure (display only; enabled before the run from the
-    // idle panel, since the mouse is unavailable once a run starts). Updates as each
-    // iteration's scores land.
+    // The live score-distribution figure (when enabled) is shown large in a separate
+    // right-hand side panel, not here, so it is actually readable. See
+    // `GuiApp::render_live_chart_panel`.
     if state.show_live_chart {
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(4.0);
-        ui.label(RichText::new("スコア分布（ライブ）").strong());
-        match live_chart {
-            Some(tex) => {
-                // Scale to the panel width, preserving the figure's aspect ratio.
-                let w = ui.available_width();
-                let size = tex.size();
-                let aspect = size[1] as f32 / size[0] as f32;
-                ui.add_space(4.0);
-                ui.image((tex.id(), Vec2::new(w, w * aspect)));
-            }
-            None => {
-                ui.add_space(4.0);
-                ui.label(RichText::new("分布を準備中…").small().weak());
-            }
-        }
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new("→ スコア分布を右側に表示中")
+                .small()
+                .weak(),
+        );
     }
 }
 
