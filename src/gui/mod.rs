@@ -899,14 +899,6 @@ impl eframe::App for GuiApp {
                                 &mut self.state,
                                 self.live_chart_tex.as_ref(),
                             );
-                            if actions.toggle_live_chart {
-                                self.state.show_live_chart = !self.state.show_live_chart;
-                                if !self.state.show_live_chart {
-                                    // Free the texture and force a re-render next time it is shown.
-                                    self.live_chart_tex = None;
-                                    self.live_chart_rendered_count = 0;
-                                }
-                            }
                             if actions.start { self.handle_start(); }
                             if actions.stop { self.handle_stop(); }
                             if actions.continue_run { self.handle_continue(); }

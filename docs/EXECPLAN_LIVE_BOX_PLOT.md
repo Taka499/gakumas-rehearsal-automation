@@ -18,14 +18,15 @@ Two product decisions are fixed for this plan (see Decision Log for rationale):
 1. **Flagged rows are excluded from the live figure until verified.** A "flagged" row is one where the OCR overlap-recovery logic could not confidently reconstruct the score (the worst of its three stages came back `flagged`, written as the 13th CSV column `recovery=flagged`). Such a row is omitted from the live statistics so the live box plot is never skewed by an unconfirmed value. Rows whose recovery is `ok`, `repaired`, `manual`, or `verified` are all included.
 2. **One combined figure, nine boxes in a single row, statistics printed below each box.** We do not add per-column pop-out charts to the live view; the value is the at-a-glance combined distribution.
 
-You will know it works when: you start an automation run from the GUI, tick a "ライブ分布を表示" (Show live distribution) checkbox in the running panel, and watch a nine-box figure appear and update on every completed iteration, with the six statistics under each box changing as new scores land — and a flagged iteration does **not** move the boxes.
+You will know it works when: in the idle panel you tick a "ライブ分布を表示" (Show live distribution) checkbox (next to the run-count, before Start), start an automation run, and watch a nine-box figure appear and update on every completed iteration, with the six statistics under each box changing as new scores land — and a flagged iteration does **not** move the boxes. The checkbox is a pre-run choice precisely because, once the run starts, the automation controls the mouse and the user is told not to move it.
 
 
 ## Progress
 
 - [x] (2026-07-01) M1 — Live score buffer plumbed from the OCR worker to a process-global store in `runner.rs`, reset on a fresh run and seeded from the existing CSV on resume/extend, excluding flagged rows. Unit test `live_score_buffer_records_and_excludes_flagged` passes; `cargo check` clean.
 - [x] (2026-07-01) M2 — In-memory renderer `render_live_box_plot_rgba` in `analysis/charts.rs` (nine boxes + six-line stats block per column, RGBA buffer, no file I/O), backed by `DataSetStats::from_score_rows` in `analysis/statistics.rs`. Tests `render_live_box_plot_*`, `group_thousands_*`, `from_score_rows_*` pass; `#[ignore]`d `live_box_plot_preview` produced a clean `temp/live_box_plot_preview.png` (verified visually). `cargo check` clean.
-- [x] (2026-07-01) M3 — GUI wiring code-complete: `show_live_chart` toggle on `GuiState`; `live_chart_tex`/`live_chart_rendered_count` on `GuiApp`; `GuiApp::update_live_chart` rebuilds the texture only when `live_score_count()` changes; "ライブ分布を表示" checkbox + inline `ui.image` in `render_running` (texture threaded through `render_control_panel`). `cargo check` clean, full suite 116 passed, guarded release build OK (1m59s, 28 expected warnings). Remaining: manual click-through against the live game (cannot be automated here — needs `gakumas.exe`).
+- [x] (2026-07-01) M3 — GUI wiring code-complete: `show_live_chart` preference on `GuiState`; `live_chart_tex`/`live_chart_rendered_count` on `GuiApp`; `GuiApp::update_live_chart` rebuilds the texture only when `live_score_count()` changes; "ライブ分布を表示" **pre-run checkbox in `render_idle`** (above Start), with `render_running` displaying the figure inline (texture threaded through `render_control_panel`). `cargo check` clean, full suite 116 passed, guarded release build OK (28 expected warnings). Remaining: manual click-through against the live game (cannot be automated here — needs `gakumas.exe`).
+- [x] (2026-07-01) M3 fix — moved the show/hide control out of the running panel (unreachable once the run owns the mouse) into the idle panel as a pre-run preference; removed the dead `PanelActions::toggle_live_chart` plumbing. See Decision Log.
 
 Use timestamps (UTC) as steps complete, e.g. `- [x] (2026-06-30 14:00Z) M1 done`.
 
@@ -54,6 +55,10 @@ Use timestamps (UTC) as steps complete, e.g. `- [x] (2026-06-30 14:00Z) M1 done`
 - Decision: Store every non-discarded row in the live buffer tagged with a `flagged: bool`, and filter at statistics-compute time, rather than dropping flagged rows at insert time.
   Rationale: Keeping flagged rows (but excluding them from stats) lets the figure caption report "(N flagged, excluded)" so the user understands why the live count may lag the iteration counter. It also leaves room for a future "verify mid-run" feature to un-flag without re-deriving the buffer.
   Date/Author: 2026-06-30 / Taka499.
+
+- Decision: The show/hide control is a **pre-run preference checkbox in the idle panel** (next to the run-count, above Start), not an interactive toggle in the running panel. The running panel only *displays* the figure when the preference is on.
+  Rationale: The first M3 implementation put the checkbox in the running panel, but that panel only appears after Start — at which point the automation has taken over the mouse and the user is explicitly warned not to move it, so the checkbox was unreachable. Deciding before the run (the same place the run count is set) and then auto-displaying needs no mouse interaction mid-run. The preference persists in `GuiState`, so a resumed/continued run honors the choice made before the original run. Because the checkbox sits in `render_idle` (which already holds `&mut GuiState`), it mutates `state.show_live_chart` directly and the `PanelActions::toggle_live_chart` plumbing was removed as dead code.
+  Date/Author: 2026-07-01 / Taka499 (raised after manual review of the M3 UX).
 
 
 ## Outcomes & Retrospective
@@ -198,9 +203,11 @@ Edits:
    - `pub live_chart_tex: Option<egui::TextureHandle>` (the cached figure; not `Debug` — extend the hand-written `Debug` impl to print e.g. `live_chart_tex.is_some()`).
    - `pub live_chart_rendered_count: usize` (the live-row count the cached texture was built from; used to detect "new data").
 
-2. In `src/gui/render.rs`:
-   - Add a field `pub toggle_live_chart: bool` to `struct PanelActions` (default false).
-   - In `render_running`, after the progress bar block, add a checkbox. Since `render_running` takes `state: &GuiState` (immutable), do **not** mutate state here; instead emit through `actions`: render `ui.checkbox(&mut shown, "ライブ分布を表示")` against a local `let mut shown = state.show_live_chart;` and if `shown != state.show_live_chart { actions.toggle_live_chart = true; }`. When `state.show_live_chart` is true, if `let Some(tex) = &state.live_chart_tex`, display it scaled to the panel width preserving aspect: compute `let w = ui.available_width(); let aspect = tex.size()[1] as f32 / tex.size()[0] as f32; ui.image((tex.id(), egui::Vec2::new(w, w * aspect)));` (this mirrors the existing `ui.image((tex.id(), Vec2::new(width, height)))` usage at `render.rs:76`). If the texture is not yet built, show a small "分布を準備中…" label.
+2. In `src/gui/render.rs` (revised — see Decision Log 2026-07-01): the show/hide control is a **pre-run preference checkbox in `render_idle`**, NOT a toggle in `render_running`. The running panel only displays the figure.
+   - In `render_idle` (which takes `state: &mut GuiState`), after `render_count_input` and before the Start button, add `ui.checkbox(&mut state.show_live_chart, "ライブ分布を表示")` (with a hover hint). It mutates the preference directly — no `PanelActions` field is needed.
+   - Thread the cached texture into the panel: `render_control_panel(ui, state, live_chart: Option<&TextureHandle>)` passes it to `render_running(ui, state, current, total, live_chart, actions)`.
+   - In `render_running`, when `state.show_live_chart` is true, display the figure scaled to the panel width preserving aspect: `let w = ui.available_width(); let aspect = tex.size()[1] as f32 / tex.size()[0] as f32; ui.image((tex.id(), egui::Vec2::new(w, w * aspect)));` (mirrors the existing `ui.image((tex.id(), Vec2::new(width, height)))` usage at `render.rs:76`). If the texture is not yet built, show a small "分布を準備中…" label.
+   - Rationale for not putting the checkbox in `render_running`: that panel only appears after Start, when the automation owns the mouse and the user is warned not to move it, so the toggle would be unreachable.
 
 3. In `src/gui/mod.rs::update`, after `self.update_automation_status();` and before building the central panel, add live-chart maintenance:
    - Dispatch the toggle: if the last computed `PanelActions.toggle_live_chart` is true, flip `self.state.show_live_chart`. (Follow however `PanelActions` is currently dispatched — the control panel returns `PanelActions` and `update` calls `handle_*`; add the flip alongside the other dispatch handling. When turning the chart *off*, you may drop `self.state.live_chart_tex = None;` to free the texture.)
@@ -262,10 +269,10 @@ Automated (must pass):
 Manual (the real proof, behavior a human verifies):
 
 1. Launch the game `gakumas.exe` to the rehearsal screen and start the app elevated.
-2. From the GUI third column (idle panel), start a run of, say, 20 iterations.
-3. While it runs, tick "ライブ分布を表示". Observe: within ~one iteration, a figure of nine box plots appears, each with six numbers (Avg/Med/Max/Min/Q1/Q3) printed beneath. As iterations complete, the boxes and numbers visibly update; the title shows the running count.
+2. In the GUI third column (idle panel), tick "ライブ分布を表示", then start a run of, say, 20 iterations.
+3. While it runs, observe: within ~one iteration, a figure of nine box plots appears under the progress bar, each with six numbers (Avg/Med/Max/Min/Q1/Q3) printed beneath. As iterations complete, the boxes and numbers visibly update; the title shows the running count. No mouse interaction is needed during the run.
 4. Confirm flagged exclusion: if an iteration is flagged (watch `session.log` for `iteration N FLAGGED for review`), the figure's run-count in the title increments by less than the iteration counter, and the boxes do **not** lurch on that iteration. The title shows `… N flagged excluded`.
-5. Untick the checkbox: the figure disappears; re-tick: it reappears with current data.
+5. Run a second series with the checkbox left unticked: no figure appears in the running panel.
 6. Let the run finish, then open the session's `charts/chart_combined.png`. The live figure's boxes should broadly match the final combined box plot (allowing for the deliberate difference that the live one excluded flagged rows).
 7. Resume/extend acceptance: interrupt a run (Ctrl+Shift+Q), then resume or "追加実行" into the same folder; with the toggle on, the live figure should immediately reflect the **already-completed** rows (seeded from CSV), not start from an empty buffer.
 

@@ -111,9 +111,6 @@ pub struct PanelActions {
     pub extend: bool,
     /// Open the OCR result review/edit window for the latest session.
     pub open_review: bool,
-    /// The "ライブ分布を表示" checkbox was toggled this frame (show/hide the live
-    /// score-distribution figure in the running panel).
-    pub toggle_live_chart: bool,
 }
 
 /// Signals collected from the review/edit window in one frame.
@@ -165,6 +162,14 @@ fn render_idle(ui: &mut egui::Ui, state: &mut GuiState, actions: &mut PanelActio
     ui.add_space(8.0);
 
     render_count_input(ui, "実行回数:", &mut state.iterations);
+
+    ui.add_space(8.0);
+    // Pre-run preference: when on, the running panel shows a live score-distribution
+    // figure that updates as each iteration completes. Chosen here, before Start,
+    // because once a run begins the automation takes over the mouse and the user is
+    // asked not to move it — so it cannot be toggled from the running panel.
+    ui.checkbox(&mut state.show_live_chart, "ライブ分布を表示")
+        .on_hover_text("実行中に9つのスコア分布（箱ひげ図）をリアルタイム表示します");
 
     ui.add_space(12.0);
     if ui.button(RichText::new("▶ 開始").size(18.0)).clicked() {
@@ -253,15 +258,14 @@ fn render_running(
         actions.stop = true;
     }
 
-    // Live score-distribution figure: a checkbox toggle, then (when enabled) the
-    // nine-box plot rendered each time a new iteration's scores land.
-    ui.add_space(12.0);
-    ui.separator();
-    let mut shown = state.show_live_chart;
-    if ui.checkbox(&mut shown, "ライブ分布を表示").changed() {
-        actions.toggle_live_chart = true;
-    }
+    // Live score-distribution figure (display only; enabled before the run from the
+    // idle panel, since the mouse is unavailable once a run starts). Updates as each
+    // iteration's scores land.
     if state.show_live_chart {
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(4.0);
+        ui.label(RichText::new("スコア分布（ライブ）").strong());
         match live_chart {
             Some(tex) => {
                 // Scale to the panel width, preserving the figure's aspect ratio.
