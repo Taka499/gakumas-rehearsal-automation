@@ -82,7 +82,7 @@ A key feature is visual preview: during calibration, after each item is defined,
 
 ## Context and Orientation
 
-The gakumas-screenshot application is a Windows system tray tool that captures screenshots of the game "Gakuen iDOLM@STER". It currently supports:
+The gakumas-rehearsal-automation application is a Windows system tray tool that captures screenshots of the game "Gakuen iDOLM@STER". It currently supports:
 
 - Finding the game window by process name (`gakumas.exe`)
 - Capturing the window via Windows Graphics Capture API

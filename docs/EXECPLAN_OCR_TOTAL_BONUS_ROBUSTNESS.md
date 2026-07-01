@@ -198,7 +198,7 @@ Finally, add a one-line cross-reference in `docs/EXECPLAN_OVERLAP_SCORE_RECOVERY
 
 ## Concrete Steps
 
-Work from the repository root `C:\Work\GitRepos\gakumas-screenshot`. PowerShell is primary; the Bash tool is available for POSIX one-liners.
+Work from the repository root `C:\Work\GitRepos\gakumas-rehearsal-automation`. PowerShell is primary; the Bash tool is available for POSIX one-liners.
 
 Build (expect ~30 pre-existing warnings; only `^error` lines matter):
 

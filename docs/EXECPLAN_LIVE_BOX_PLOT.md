@@ -240,11 +240,11 @@ M3 acceptance: see Validation and Acceptance.
 
 ## Concrete Steps
 
-All commands run from the repository root `C:\Work\GitRepos\gakumas-screenshot` in PowerShell.
+All commands run from the repository root `C:\Work\GitRepos\gakumas-rehearsal-automation` in PowerShell.
 
 Before building, ensure no app instance is running (it locks the exe):
 
-    Get-Process gakumas-screenshot -ErrorAction SilentlyContinue
+    Get-Process gakumas-rehearsal-automation -ErrorAction SilentlyContinue
 
 Build (guarded; aborts fast if the app is running, `-Kill` stops it):
 
@@ -269,7 +269,7 @@ Find real compile errors amid the ~30 expected warnings:
 
 Run the app for manual acceptance:
 
-    .\target\release\gakumas-screenshot.exe
+    .\target\release\gakumas-rehearsal-automation.exe
 
 
 ## Validation and Acceptance

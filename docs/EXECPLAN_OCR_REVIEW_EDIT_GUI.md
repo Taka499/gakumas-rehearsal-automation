@@ -187,12 +187,12 @@ Acceptance (manual): edit a flagged row to the value read from its screenshot, S
 
 ## Concrete Steps
 
-From repo root `C:\Work\GitRepos\gakumas-screenshot` (PowerShell; Bash tool available):
+From repo root `C:\Work\GitRepos\gakumas-rehearsal-automation` (PowerShell; Bash tool available):
 
     cargo build --release
     GAKUMAS_NO_MANIFEST=1 cargo test reconcile        # M1
     GAKUMAS_NO_MANIFEST=1 cargo test results_edit      # M2
-    .\target\release\gakumas-screenshot.exe            # M3-M5 manual (run a short series or open a prior session)
+    .\target\release\gakumas-rehearsal-automation.exe            # M3-M5 manual (run a short series or open a prior session)
 
 Build emits ~30 expected warnings; only `^error` lines matter.
 

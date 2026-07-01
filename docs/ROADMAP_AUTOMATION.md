@@ -77,7 +77,7 @@ The project currently provides a **manual screenshot tool**:
 The application is organized into modules:
 
 ```
-gakumas-screenshot/
+gakumas-rehearsal-automation/
 ├── src/
 │   ├── main.rs              # Application shell, tray, message loop, hotkeys
 │   ├── capture/
@@ -109,8 +109,8 @@ gakumas-screenshot/
 │       └── extract.rs       # Pattern matching, score extraction
 ├── config.json              # Automation configuration (button positions, thresholds)
 ├── build.rs                 # Embeds Windows manifest
-├── gakumas-screenshot.exe.manifest  # UAC elevation (requireAdministrator)
-├── gakumas-screenshot.rc    # Resource file for manifest
+├── gakumas-rehearsal-automation.exe.manifest  # UAC elevation (requireAdministrator)
+├── gakumas-rehearsal-automation.rc    # Resource file for manifest
 ├── Cargo.toml               # Dependencies and build config
 ├── CLAUDE.md                # Development guidance
 └── docs/
@@ -434,7 +434,7 @@ Trade-offs:
 
 #### 5.2.4 Process Name Matching Fix
 
-During testing, discovered that substring matching (`contains("gakumas")`) incorrectly matched `gakumas-screenshot.exe`. Fixed to use exact match:
+During testing, discovered that substring matching (`contains("gakumas")`) incorrectly matched `gakumas-rehearsal-automation.exe`. Fixed to use exact match:
 
 ```rust
 // Before (buggy)
@@ -1473,7 +1473,7 @@ Provide user-friendly interfaces for configuration and monitoring.
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "gakumas-screenshot")]
+#[command(name = "gakumas-rehearsal-automation")]
 #[command(about = "Gakumas rehearsal automation tool")]
 struct Cli {
     /// Number of iterations to run
@@ -1642,7 +1642,7 @@ A future phase will add a graphical user interface using a Rust GUI framework.
 
 ```toml
 [package]
-name = "gakumas-screenshot"
+name = "gakumas-rehearsal-automation"
 version = "0.2.0"
 edition = "2024"
 
@@ -1767,13 +1767,13 @@ cargo build
 cargo build --release
 
 # Run with default settings
-.\target\release\gakumas-screenshot.exe
+.\target\release\gakumas-rehearsal-automation.exe
 
 # Run with automation
-.\target\release\gakumas-screenshot.exe -n 100 -o ./results
+.\target\release\gakumas-rehearsal-automation.exe -n 100 -o ./results
 
 # Run calibration
-.\target\release\gakumas-screenshot.exe --calibrate
+.\target\release\gakumas-rehearsal-automation.exe --calibrate
 ```
 
 ---
@@ -1783,7 +1783,7 @@ cargo build --release
 ### 11.1 Current Structure
 
 ```
-gakumas-screenshot/
+gakumas-rehearsal-automation/
 ├── src/
 │   └── main.rs
 ├── Cargo.toml
@@ -1796,7 +1796,7 @@ gakumas-screenshot/
 ### 11.2 Current Structure (After Phase 3)
 
 ```
-gakumas-screenshot/
+gakumas-rehearsal-automation/
 ├── src/
 │   ├── main.rs              # Entry point, tray app, message loop, hotkeys
 │   ├── capture/
@@ -1830,8 +1830,8 @@ gakumas-screenshot/
 ├── Cargo.toml
 ├── Cargo.lock
 ├── build.rs                 # Embeds Windows manifest
-├── gakumas-screenshot.exe.manifest  # UAC elevation (requireAdministrator)
-├── gakumas-screenshot.rc    # Resource file for manifest
+├── gakumas-rehearsal-automation.exe.manifest  # UAC elevation (requireAdministrator)
+├── gakumas-rehearsal-automation.rc    # Resource file for manifest
 ├── CLAUDE.md                # Development guidance
 └── docs/
     ├── PLANS.md             # ExecPlan authoring guidelines
@@ -1844,7 +1844,7 @@ gakumas-screenshot/
 ### 11.3 Target Structure (After All Phases)
 
 ```
-gakumas-screenshot/
+gakumas-rehearsal-automation/
 ├── src/
 │   ├── ...                  # (current structure)
 │   └── analysis/            # Phase 4 - PLANNED
@@ -1914,7 +1914,7 @@ gakumas-screenshot/
 | Japanese characters in paths | Use wide string APIs (W suffix) consistently |
 | PostMessage returns "Access is denied" | UIPI blocking - run at same privilege level as target |
 | Game ignores PostMessage clicks | Game requires foreground focus; use SendInput with SetForegroundWindow instead |
-| Process name substring match | Use exact match (`== "gakumas.exe"`) to avoid matching `gakumas-screenshot.exe` |
+| Process name substring match | Use exact match (`== "gakumas.exe"`) to avoid matching `gakumas-rehearsal-automation.exe` |
 | Config not loading | Config is loaded from exe directory, not CWD; copy config.json next to the exe |
 | Brightness unreliable for State 1→2 | Use histogram comparison against reference images instead of brightness for page detection |
 | Cursor appears in screenshots | Fixed: Use `SetIsCursorCaptureEnabled(false)` on capture session |

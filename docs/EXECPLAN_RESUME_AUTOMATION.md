@@ -6,7 +6,7 @@ This repository's ExecPlan conventions live in `docs/PLANS.md` (relative to the 
 
 ## Purpose / Big Picture
 
-This tool (`gakumas-screenshot`) is a Windows system-tray + GUI app that automates the game "Gakumas" rehearsal screen: it runs a chosen number of rehearsal cycles ("runs"), capturing one screenshot per run into a timestamped session folder and extracting nine scores per screenshot with OCR. A "run" is one full rehearsal cycle that produces one screenshot and one row of scores in `results.csv`.
+This tool (`gakumas-rehearsal-automation`) is a Windows system-tray + GUI app that automates the game "Gakumas" rehearsal screen: it runs a chosen number of rehearsal cycles ("runs"), capturing one screenshot per run into a timestamped session folder and extracting nine scores per screenshot with OCR. A "run" is one full rehearsal cycle that produces one screenshot and one row of scores in `results.csv`.
 
 Today, if a run series stops early — because the game got stuck, the network hiccuped (a timeout/error), or the user pressed the abort hotkey — the only option is to start a brand-new series from zero. All the work already done is stranded in the old session folder.
 
@@ -20,7 +20,7 @@ You can see it working like this: start a series of 5 runs, abort after 2, obser
 - [x] (2026-06-13) M1: Persisted session metadata module `src/automation/session_meta.rs` (write/read `run-meta.json`, `count_captured`, `list_resumable`). Registered in `mod.rs`; `cargo check` clean.
 - [x] (2026-06-13) M2: Resume-capable engine: `start_iteration` in the state machine; `resume_automation` + `start_automation_inner` in the runner; metadata writes at start and end. `cargo check` clean (only an expected `unused import: resume_automation` warning until M3 wires it).
 - [x] (2026-06-13) M3: GUI quick "Continue last run" button driven by in-memory status. `resumable()` helper, `render_controls` returns 3-tuple, `handle_continue` wired in `update()`. `cargo check` clean.
-- [x] (2026-06-13) M4: GUI "resume a previous session" picker driven by on-disk metadata (restart survival). `render_resume_picker`, `scan_resumable_sessions` (called in `new`, on finalize, on 更新), `handle_resume_selected`. `cargo build --release` succeeds; binary at `target\release\gakumas-screenshot.exe`. Manual acceptance scenarios A–D confirmed passing by the user (2026-06-13).
+- [x] (2026-06-13) M4: GUI "resume a previous session" picker driven by on-disk metadata (restart survival). `render_resume_picker`, `scan_resumable_sessions` (called in `new`, on finalize, on 更新), `handle_resume_selected`. `cargo build --release` succeeds; binary at `target\release\gakumas-rehearsal-automation.exe`. Manual acceptance scenarios A–D confirmed passing by the user (2026-06-13).
 
 Use timestamps (UTC) when checking off items, e.g. `- [x] (2026-06-06 14:00Z) ...`.
 
@@ -55,7 +55,7 @@ To be completed at the end of each milestone and at full completion. Compare aga
 
 ## Context and Orientation
 
-You are working in a Rust 2024-edition Windows application. Build with `cargo build` / `cargo build --release` from the repository root (`C:\Work\GitRepos\gakumas-screenshot`). The executable carries an administrator manifest, so `cargo test` cannot launch the test binary (it fails with an elevation error). Therefore the compile gate for this work is `cargo check`, and behavioral acceptance is manual (running the app against the game). Treat `cargo check` passing + the manual scenarios in "Validation and Acceptance" as success.
+You are working in a Rust 2024-edition Windows application. Build with `cargo build` / `cargo build --release` from the repository root (`C:\Work\GitRepos\gakumas-rehearsal-automation`). The executable carries an administrator manifest, so `cargo test` cannot launch the test binary (it fails with an elevation error). Therefore the compile gate for this work is `cargo check`, and behavioral acceptance is manual (running the app against the game). Treat `cargo check` passing + the manual scenarios in "Validation and Acceptance" as success.
 
 Key directories and files you must understand:
 
@@ -592,7 +592,7 @@ Render and wire the picker in `update()`, in column three after `render::render_
 
 ## Concrete Steps
 
-Run all commands from the repository root `C:\Work\GitRepos\gakumas-screenshot` in PowerShell.
+Run all commands from the repository root `C:\Work\GitRepos\gakumas-rehearsal-automation` in PowerShell.
 
 1. Implement M1, then compile-check:
 
@@ -616,13 +616,13 @@ Run all commands from the repository root `C:\Work\GitRepos\gakumas-screenshot` 
 
     cargo build --release
 
-   Expected: `Finished release` with no errors. The binary is `target\release\gakumas-screenshot.exe`.
+   Expected: `Finished release` with no errors. The binary is `target\release\gakumas-rehearsal-automation.exe`.
 
 ## Validation and Acceptance
 
 Because the executable requires administrator elevation, automated `cargo test` cannot run; acceptance is the following manual scenarios. Launch the built app (it must run elevated if the game runs elevated):
 
-    .\target\release\gakumas-screenshot.exe
+    .\target\release\gakumas-rehearsal-automation.exe
 
 Scenario A — In-session continue (M2+M3). With the game on the rehearsal start page, set 実行回数 to 5 and press 開始. After 2 runs complete, press the abort hotkey Ctrl+Shift+Q. Observe the progress line read "中断 (2/5回 完了)" in amber and a "⏵ 続行 (残り 3回)" button appear. Put the game back on the rehearsal start page and click the button. The app performs runs 3–5. When done, the status reads "完了 (5/5回) → <folder>". Open the session folder (📁 フォルダを開く) and confirm: `screenshots/` contains files numbered `001`–`005`; `results.csv` has exactly one header line plus five data rows (no duplicate header); `run-meta.json` contains `"total": 5`, `"completed": 5`, `"status": "completed"`. This proves resume appends into the same folder with continuous numbering.
 

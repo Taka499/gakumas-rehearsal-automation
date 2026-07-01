@@ -102,7 +102,7 @@ Terms used in this plan, in plain language:
 - "immediate viewport" — egui's term for an independent top-level OS window driven each frame by a closure; the review window is one.
 - "window fraction" — a coordinate in `0.0..1.0` relative to the captured client area, as used by `RelativeRect`.
 
-Build/test: the admin manifest blocks `cargo test` unless built with `GAKUMAS_NO_MANIFEST=1 cargo test` (gate in `build.rs`). The config/crop derivation is pure and unit-testable this way; the egui window is verified by building (`scripts/build.ps1`) and manual interaction (the tray GUI cannot be driven from `cargo test`). A running instance of `gakumas-screenshot.exe` locks the output binary, so always build via `powershell -ExecutionPolicy Bypass -File scripts/build.ps1` (it aborts in ~1s if the app is running; pass `-Kill` to stop it first) rather than a bare `cargo build --release`.
+Build/test: the admin manifest blocks `cargo test` unless built with `GAKUMAS_NO_MANIFEST=1 cargo test` (gate in `build.rs`). The config/crop derivation is pure and unit-testable this way; the egui window is verified by building (`scripts/build.ps1`) and manual interaction (the tray GUI cannot be driven from `cargo test`). A running instance of `gakumas-rehearsal-automation.exe` locks the output binary, so always build via `powershell -ExecutionPolicy Bypass -File scripts/build.ps1` (it aborts in ~1s if the app is running; pass `-Kill` to stop it first) rather than a bare `cargo build --release`.
 
 
 ## Plan of Work
@@ -328,7 +328,7 @@ Acceptance: with the tuned `review_crop_adjust` in `config.json`, the GUI review
 
 ## Concrete Steps
 
-From repo root `C:\Work\GitRepos\gakumas-screenshot` (PowerShell; the Bash tool is also available):
+From repo root `C:\Work\GitRepos\gakumas-rehearsal-automation` (PowerShell; the Bash tool is also available):
 
     # M1 — config + derivation (pure, unit tested)
     GAKUMAS_NO_MANIFEST=1 cargo test review_crop
@@ -339,7 +339,7 @@ From repo root `C:\Work\GitRepos\gakumas-screenshot` (PowerShell; the Bash tool 
     powershell -ExecutionPolicy Bypass -File scripts/build.ps1 -Kill
 
     # Run and verify manually
-    .\target\release\gakumas-screenshot.exe
+    .\target\release\gakumas-rehearsal-automation.exe
 
 Build emits ~30 expected warnings; only `^error` lines matter (`cargo check 2>&1 | grep "^error"`).
 

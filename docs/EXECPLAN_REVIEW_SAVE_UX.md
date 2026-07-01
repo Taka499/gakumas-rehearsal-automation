@@ -118,7 +118,7 @@ Milestone M5 (build, run, verify). Build with the guarded wrapper, run, and conf
 
 ## Concrete Steps
 
-Work from the repository root `C:\Work\GitRepos\gakumas-screenshot`.
+Work from the repository root `C:\Work\GitRepos\gakumas-rehearsal-automation`.
 
 Compile-check:
 
@@ -130,7 +130,7 @@ Build release (guarded; a running instance locks the exe):
 
 Run:
 
-    ./target/release/gakumas-screenshot.exe
+    ./target/release/gakumas-rehearsal-automation.exe
 
 
 ## Validation and Acceptance

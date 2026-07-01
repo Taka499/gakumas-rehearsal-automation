@@ -92,8 +92,8 @@ The user-visible outcome is: download the release folder, run the exe, and autom
 
 ### Release Package Structure
 ```
-gakumas-screenshot/
-├── gakumas-screenshot.exe (38.15 MB, includes embedded Tesseract)
+gakumas-rehearsal-automation/
+├── gakumas-rehearsal-automation.exe (38.15 MB, includes embedded Tesseract)
 ├── config.json
 ├── logs/               (created on startup)
 ├── screenshots/        (created on startup)
@@ -112,12 +112,12 @@ gakumas-screenshot/
 
 ## Context and Orientation
 
-The gakumas-screenshot application is a Windows system tray tool that automates game rehearsals by capturing screenshots and extracting scores via OCR. It requires Tesseract OCR to function.
+The gakumas-rehearsal-automation application is a Windows system tray tool that automates game rehearsals by capturing screenshots and extracting scores via OCR. It requires Tesseract OCR to function.
 
 Key files and their current behavior:
 
     src/ocr/setup.rs
-    - get_tesseract_dir(): Returns %LOCALAPPDATA%\gakumas-screenshot\tesseract
+    - get_tesseract_dir(): Returns %LOCALAPPDATA%\gakumas-rehearsal-automation\tesseract
     - ensure_tesseract(): Tries to download or find system Tesseract installation
     - find_tesseract_executable(): Searches multiple locations for tesseract.exe
     - find_tessdata_dir(): Searches for eng.traineddata
@@ -142,7 +142,7 @@ Key files and their current behavior:
 Current release structure (implicit):
 
     (wherever user puts it)/
-    ├── gakumas-screenshot.exe
+    ├── gakumas-rehearsal-automation.exe
     ├── config.json
     ├── gakumas_screenshot.log
     ├── gakumas_*.png (screenshots scattered)
@@ -151,8 +151,8 @@ Current release structure (implicit):
 
 Target release structure:
 
-    gakumas-screenshot/
-    ├── gakumas-screenshot.exe
+    gakumas-rehearsal-automation/
+    ├── gakumas-rehearsal-automation.exe
     ├── config.json
     ├── tesseract/
     │   ├── tesseract.exe
@@ -433,7 +433,7 @@ Test the complete flow:
        cargo build --release
 
        # Create output structure
-       $releaseDir = "$OutputDir/gakumas-screenshot"
+       $releaseDir = "$OutputDir/gakumas-rehearsal-automation"
        if (Test-Path $releaseDir) {
            Remove-Item -Recurse -Force $releaseDir
        }
@@ -444,7 +444,7 @@ Test the complete flow:
        New-Item -ItemType Directory -Path "$releaseDir/assets" | Out-Null
 
        # Copy files
-       Copy-Item "target/release/gakumas-screenshot.exe" $releaseDir
+       Copy-Item "target/release/gakumas-rehearsal-automation.exe" $releaseDir
        Copy-Item "config.json" $releaseDir -ErrorAction SilentlyContinue
 
        # Note: tesseract/ will be created on first run from embedded zip
@@ -463,8 +463,8 @@ Test the complete flow:
 
 3. Run the exe:
 
-       cd release/gakumas-screenshot
-       ./gakumas-screenshot.exe
+       cd release/gakumas-rehearsal-automation
+       ./gakumas-rehearsal-automation.exe
 
 4. Verify in the log output that Tesseract extraction occurs.
 
@@ -503,11 +503,11 @@ Test command sequence:
 
     # From repository root
     powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
-    cd release/gakumas-screenshot
+    cd release/gakumas-rehearsal-automation
     # Ensure tesseract/ does not exist
     Remove-Item -Recurse -Force tesseract -ErrorAction SilentlyContinue
     # Run
-    ./gakumas-screenshot.exe
+    ./gakumas-rehearsal-automation.exe
     # After startup, check:
     # - tesseract/tesseract.exe exists
     # - logs/gakumas_screenshot.log exists

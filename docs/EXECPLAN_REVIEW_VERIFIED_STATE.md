@@ -117,7 +117,7 @@ Milestone M4 (build, run, verify). Build the release binary with the guarded wra
 
 ## Concrete Steps
 
-Work from the repository root `C:\Work\GitRepos\gakumas-screenshot` in PowerShell unless noted. The Bash tool is also available.
+Work from the repository root `C:\Work\GitRepos\gakumas-rehearsal-automation` in PowerShell unless noted. The Bash tool is also available.
 
 Run the data-layer test as you implement M1 (the admin manifest blocks the test harness unless you skip it via the build gate):
 
@@ -137,7 +137,7 @@ Build the release binary (guarded; a running instance locks the exe). PREFER:
 
 Run it:
 
-    ./target/release/gakumas-screenshot.exe
+    ./target/release/gakumas-rehearsal-automation.exe
 
 
 ## Validation and Acceptance

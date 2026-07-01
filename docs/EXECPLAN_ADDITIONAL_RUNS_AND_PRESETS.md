@@ -7,7 +7,7 @@ This repository's ExecPlan conventions live in `docs/PLANS.md` (relative to the 
 
 ## Purpose / Big Picture
 
-This tool (`gakumas-screenshot`) is a Windows system-tray + GUI application that automates the game "Gakumas" rehearsal screen. It runs a chosen number of rehearsal cycles ("runs"); each run captures one screenshot into a timestamped session folder under `output/` and extracts nine scores per screenshot with OCR. A "run" is one full rehearsal cycle that produces one screenshot and one row in that session's `results.csv`. The main window is an `egui` GUI (an "immediate-mode" UI library: the interface is rebuilt from scratch every frame by calling functions like `ui.button(...)`, and a button "click" is simply that call returning a value whose `.clicked()` is true on the frame it was pressed). Its third column is a single state-driven control panel that shows only the controls relevant to the current automation state.
+This tool (`gakumas-rehearsal-automation`) is a Windows system-tray + GUI application that automates the game "Gakumas" rehearsal screen. It runs a chosen number of rehearsal cycles ("runs"); each run captures one screenshot into a timestamped session folder under `output/` and extracts nine scores per screenshot with OCR. A "run" is one full rehearsal cycle that produces one screenshot and one row in that session's `results.csv`. The main window is an `egui` GUI (an "immediate-mode" UI library: the interface is rebuilt from scratch every frame by calling functions like `ui.button(...)`, and a button "click" is simply that call returning a value whose `.clicked()` is true on the frame it was pressed). Its third column is a single state-driven control panel that shows only the controls relevant to the current automation state.
 
 Two everyday frictions remain, and this plan removes both:
 
@@ -66,7 +66,7 @@ To be completed at the end of each milestone and at full completion. Compare aga
 
 ## Context and Orientation
 
-You are working in a Rust 2024-edition Windows application. Build from the repository root (`C:\Work\GitRepos\gakumas-screenshot`) with `cargo build` / `cargo build --release`. The executable carries an administrator manifest, so `cargo test` cannot launch the test binary (it fails with an elevation error). Therefore the compile gate for this work is `cargo check`, and behavioral acceptance is manual (running the app and looking at the window, with the game open for the run-related scenarios). Build emits ~30 expected warnings (unused `pub use` re-exports, OCR dead code); these are not regressions — find real failures with `cargo check 2>&1 | grep "^error"`.
+You are working in a Rust 2024-edition Windows application. Build from the repository root (`C:\Work\GitRepos\gakumas-rehearsal-automation`) with `cargo build` / `cargo build --release`. The executable carries an administrator manifest, so `cargo test` cannot launch the test binary (it fails with an elevation error). Therefore the compile gate for this work is `cargo check`, and behavioral acceptance is manual (running the app and looking at the window, with the game open for the run-related scenarios). Build emits ~30 expected warnings (unused `pub use` re-exports, OCR dead code); these are not regressions — find real failures with `cargo check 2>&1 | grep "^error"`.
 
 Define the terms used below in plain language: a "session folder" is one directory under `output/` named with a timestamp like `20260615_141500` that holds one series' `screenshots/`, `results.csv`, `session.log`, `charts/`, and `run-meta.json`. "Captured" means a screenshot was saved to disk for that run (the unit counted as completed). "Resume / 続行" means run the *remaining* iterations of an interrupted series into its existing folder. "Extend / 追加実行" (the new feature) means run *additional brand-new* iterations onto a series that already reached its target, into the same folder.
 
@@ -339,12 +339,12 @@ Dispatch it in `update()` where the other `PanelActions` flags are handled (insi
 
     if actions.extend { self.handle_extend(); }
 
-Build a runnable binary (`cargo build --release`). Expect `Finished release` with no errors; the binary is `target\release\gakumas-screenshot.exe`.
+Build a runnable binary (`cargo build --release`). Expect `Finished release` with no errors; the binary is `target\release\gakumas-rehearsal-automation.exe`.
 
 
 ## Concrete Steps
 
-Run all commands from the repository root `C:\Work\GitRepos\gakumas-screenshot` in PowerShell.
+Run all commands from the repository root `C:\Work\GitRepos\gakumas-rehearsal-automation` in PowerShell.
 
 1. Implement M1, then compile-check:
 
@@ -373,7 +373,7 @@ Run all commands from the repository root `C:\Work\GitRepos\gakumas-screenshot` 
 
 Because the executable requires administrator elevation, automated `cargo test` cannot run; acceptance is the following manual checks. Scenario A needs no game; B–D need the game on the rehearsal start page. Launch the built app (elevated if the game runs elevated):
 
-    .\target\release\gakumas-screenshot.exe
+    .\target\release\gakumas-rehearsal-automation.exe
 
 Scenario A — Preset buttons set the count (M2, no game needed). With the app idle, confirm a row `100 200 500 1000` appears directly under "実行回数:". Tap `500`; the numeric box shows 500. Tap `1000`; it shows 1000. Drag/type still works. This proves the presets and the shared input helper.
 

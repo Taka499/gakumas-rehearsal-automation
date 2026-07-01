@@ -155,7 +155,7 @@ Modify `src/main.rs` to:
 
 ## Concrete Steps
 
-All commands run from the repository root: `C:\Work\GitRepos\gakumas-screenshot`
+All commands run from the repository root: `C:\Work\GitRepos\gakumas-rehearsal-automation`
 
 **1. Create directory structure:**
 
@@ -200,7 +200,7 @@ Expected output: Compilation succeeds with no errors. Warnings about unused impo
 
 **9. Run and test:**
 
-    .\target\release\gakumas-screenshot.exe
+    .\target\release\gakumas-rehearsal-automation.exe
 
 With the game running:
 - Press Ctrl+Shift+S: Should capture screenshot and save `gakumas_YYYYMMDD_HHMMSS.png`

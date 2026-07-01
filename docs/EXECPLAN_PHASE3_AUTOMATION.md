@@ -415,7 +415,7 @@ Manual testing checklist:
 
 ## Concrete Steps
 
-All commands run from repository root: `C:\Work\GitRepos\gakumas-screenshot`
+All commands run from repository root: `C:\Work\GitRepos\gakumas-rehearsal-automation`
 
 
 ### Step 1: Create automation module files
@@ -502,7 +502,7 @@ Update `src/main.rs`:
 Verify:
 
     cargo build --release
-    .\target\release\gakumas-screenshot.exe
+    .\target\release\gakumas-rehearsal-automation.exe
 
 Press Ctrl+Shift+A (with game running at rehearsal page).
 
@@ -526,7 +526,7 @@ Tray tooltip during automation: "Gakumas: 2/10 - Waiting for loading..."
 Run full automation test with the game:
 
 1. Start game, navigate to rehearsal page
-2. Run `.\target\release\gakumas-screenshot.exe`
+2. Run `.\target\release\gakumas-rehearsal-automation.exe`
 3. Press Ctrl+Shift+A
 4. Observe automation running
 5. After completion, check `results.csv`
@@ -578,8 +578,8 @@ The automation loop is complete when:
 
 ### Expected Directory Structure After Automation
 
-    gakumas-screenshot/
-    ├── gakumas-screenshot.exe
+    gakumas-rehearsal-automation/
+    ├── gakumas-rehearsal-automation.exe
     ├── config.json
     ├── gakumas_screenshot.log
     ├── results.csv                 # OCR results

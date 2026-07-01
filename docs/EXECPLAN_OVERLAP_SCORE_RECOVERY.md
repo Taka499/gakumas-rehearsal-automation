@@ -333,7 +333,7 @@ Calibration wizard: extend `src/calibration/` so the interactive wizard can capt
 
 ## Concrete Steps
 
-Work from the repository root `C:\Work\GitRepos\gakumas-screenshot` in PowerShell unless noted. The Bash tool is also available for POSIX one-liners.
+Work from the repository root `C:\Work\GitRepos\gakumas-rehearsal-automation` in PowerShell unless noted. The Bash tool is also available for POSIX one-liners.
 
 Build (expect ~30 pre-existing warnings; only `^error` lines matter):
 

@@ -398,7 +398,7 @@ Manual testing checklist:
 
 ## Concrete Steps
 
-All commands run from repository root: `C:\Work\GitRepos\gakumas-screenshot`
+All commands run from repository root: `C:\Work\GitRepos\gakumas-rehearsal-automation`
 
 
 ### Step 1: Add eframe dependency

@@ -7,7 +7,7 @@ This repository's ExecPlan conventions live in `docs/PLANS.md` (relative to the 
 
 ## Purpose / Big Picture
 
-This tool (`gakumas-screenshot`) is a Windows system-tray + GUI application that automates the game "Gakumas" rehearsal screen. Its main window (an `egui` GUI) is laid out in three columns: two guide images on the left, and a tall control column on the right that holds every control — the run-count input, Start/Stop, a "continue interrupted run" button, the progress bar, a generated-files summary, chart/folder actions, and a picker for resuming past sessions.
+This tool (`gakumas-rehearsal-automation`) is a Windows system-tray + GUI application that automates the game "Gakumas" rehearsal screen. Its main window (an `egui` GUI) is laid out in three columns: two guide images on the left, and a tall control column on the right that holds every control — the run-count input, Start/Stop, a "continue interrupted run" button, the progress bar, a generated-files summary, chart/folder actions, and a picker for resuming past sessions.
 
 Today that third column renders **all of those at once, stacked vertically, with no scroll container**. Three concrete problems result, all visible in normal use:
 
@@ -94,7 +94,7 @@ To be completed at the end of each milestone and at full completion. Compare aga
 
 ## Context and Orientation
 
-You are working in a Rust 2024-edition Windows application. Build from the repository root (`C:\Work\GitRepos\gakumas-screenshot`) with `cargo build` / `cargo build --release`. The executable carries an administrator manifest, so `cargo test` cannot launch the test binary (it fails with an elevation error). Therefore the compile gate for this work is `cargo check`, and behavioral acceptance is manual (running the app and looking at the window). "egui" is the immediate-mode GUI library this app uses; "immediate-mode" means the UI is rebuilt from scratch every frame by calling functions like `ui.button(...)`, and a button "click" is simply that call returning a `Response` whose `.clicked()` is true on the frame it was pressed. You never store widgets; you re-emit them each frame from current state.
+You are working in a Rust 2024-edition Windows application. Build from the repository root (`C:\Work\GitRepos\gakumas-rehearsal-automation`) with `cargo build` / `cargo build --release`. The executable carries an administrator manifest, so `cargo test` cannot launch the test binary (it fails with an elevation error). Therefore the compile gate for this work is `cargo check`, and behavioral acceptance is manual (running the app and looking at the window). "egui" is the immediate-mode GUI library this app uses; "immediate-mode" means the UI is rebuilt from scratch every frame by calling functions like `ui.button(...)`, and a button "click" is simply that call returning a `Response` whose `.clicked()` is true on the frame it was pressed. You never store widgets; you re-emit them each frame from current state.
 
 Two files matter for this work, and nothing else needs to change:
 
@@ -492,7 +492,7 @@ The guide text `"③ 回数を設定して開始"` that previously sat above the
 
 ## Concrete Steps
 
-Run all commands from the repository root `C:\Work\GitRepos\gakumas-screenshot` in PowerShell.
+Run all commands from the repository root `C:\Work\GitRepos\gakumas-rehearsal-automation` in PowerShell.
 
 1. Implement M1, then compile-check:
 
@@ -516,14 +516,14 @@ Run all commands from the repository root `C:\Work\GitRepos\gakumas-screenshot` 
 
        cargo build --release
 
-   Expected: `Finished release` with no errors. The binary is `target\release\gakumas-screenshot.exe`.
+   Expected: `Finished release` with no errors. The binary is `target\release\gakumas-rehearsal-automation.exe`.
 
 
 ## Validation and Acceptance
 
 Because the executable requires administrator elevation, automated `cargo test` cannot run; acceptance is the following manual checks. Launch the built app (run it elevated if the game runs elevated):
 
-    .\target\release\gakumas-screenshot.exe
+    .\target\release\gakumas-rehearsal-automation.exe
 
 Scenario A — No clipping (M1, persists through M2). With the app idle, drag the window to make it short (vertically small). Confirm the third column shows a vertical scrollbar and that scrolling reaches the bottom-most control; nothing is cut off. Before this change the bottom controls were unreachable without enlarging the window.
 

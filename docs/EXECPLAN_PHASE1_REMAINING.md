@@ -213,7 +213,7 @@ Add brightness calculation and loading detection. After this milestone, a hotkey
 
 ## Concrete Steps
 
-All commands are run from the repository root: `C:\Work\GitRepos\gakumas-screenshot`
+All commands are run from the repository root: `C:\Work\GitRepos\gakumas-rehearsal-automation`
 
 ### Step 1: Add Dependencies
 
@@ -300,7 +300,7 @@ In `src/main.rs`:
 Build and test:
 
     cargo build --release
-    .\target\release\gakumas-screenshot.exe
+    .\target\release\gakumas-rehearsal-automation.exe
 
 With the game running, press Ctrl+Shift+F12. The cursor should move to the center of the game window (since test_click_position defaults to 0.5, 0.5) and click.
 
@@ -384,7 +384,7 @@ The brightness value will vary based on game state (loading vs ready).
 **Manual Test Procedure:**
 
 1. Start the game (gakumas.exe)
-2. Run `.\target\release\gakumas-screenshot.exe`
+2. Run `.\target\release\gakumas-rehearsal-automation.exe`
 3. Verify log shows "Config loaded from config.json" or "Using default config"
 4. Press Ctrl+Shift+S - screenshot should save (existing functionality)
 5. Press Ctrl+Shift+F12 - cursor should move to center of game and click

@@ -95,7 +95,7 @@ This is inspired by the [gakumas-tools](https://github.com/surisuririsu/gakumas-
 
 ## Context and Orientation
 
-The gakumas-screenshot application is a Windows system tray tool that captures screenshots of the game "Gakuen iDOLM@STER". Phase 1 (complete) provides:
+The gakumas-rehearsal-automation application is a Windows system tray tool that captures screenshots of the game "Gakuen iDOLM@STER". Phase 1 (complete) provides:
 
 - Window discovery via process name matching (`gakumas.exe`)
 - Screenshot capture via Windows Graphics Capture API
@@ -135,7 +135,7 @@ Terms used in this document:
 Create infrastructure to ensure Tesseract is available at runtime. On first run, download Tesseract and the English trained data to a local directory. This avoids requiring users to install Tesseract manually.
 
 The setup module will:
-1. Check if Tesseract exists in `%LOCALAPPDATA%\gakumas-screenshot\tesseract\`
+1. Check if Tesseract exists in `%LOCALAPPDATA%\gakumas-rehearsal-automation\tesseract\`
 2. If not found, download `tesseract.exe` and required DLLs from a GitHub release
 3. Download `eng.traineddata` from the official tessdata repository
 4. Return the path to `tesseract.exe` for use by the OCR engine
@@ -223,7 +223,7 @@ This provides immediate feedback without needing to run the full automation loop
 
 ## Concrete Steps
 
-All commands run from repository root: `C:\Work\GitRepos\gakumas-screenshot`
+All commands run from repository root: `C:\Work\GitRepos\gakumas-rehearsal-automation`
 
 
 ### Step 1: Add dependencies
@@ -293,11 +293,11 @@ Expected output (first run):
     Tesseract not found locally, downloading...
     Downloading tesseract.exe...
     Downloading eng.traineddata...
-    Tesseract ready at: C:\Users\<user>\AppData\Local\gakumas-screenshot\tesseract
+    Tesseract ready at: C:\Users\<user>\AppData\Local\gakumas-rehearsal-automation\tesseract
 
 Expected output (subsequent runs):
 
-    Tesseract found at: C:\Users\<user>\AppData\Local\gakumas-screenshot\tesseract
+    Tesseract found at: C:\Users\<user>\AppData\Local\gakumas-rehearsal-automation\tesseract
 
 
 ### Step 4: Implement color threshold preprocessing

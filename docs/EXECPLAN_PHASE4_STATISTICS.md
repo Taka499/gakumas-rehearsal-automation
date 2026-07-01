@@ -602,7 +602,7 @@ Unit tests:
 
 ## Concrete Steps
 
-All commands run from repository root: `C:\Work\GitRepos\gakumas-screenshot`
+All commands run from repository root: `C:\Work\GitRepos\gakumas-rehearsal-automation`
 
 
 ### Step 1: Add plotters dependency
@@ -723,7 +723,7 @@ Update `src/main.rs` to add "Generate Charts" menu item.
 Verify:
 
     cargo build --release
-    .\target\release\gakumas-screenshot.exe
+    .\target\release\gakumas-rehearsal-automation.exe
 
 Right-click tray icon. Expected: "Generate Charts" menu item appears.
 
