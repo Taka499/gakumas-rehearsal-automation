@@ -1,5 +1,5 @@
 [project]
-name = "gakumas-screenshot-tools"
+name = "gakumas-rehearsal-automation-tools"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [

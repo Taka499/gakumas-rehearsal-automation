@@ -18,7 +18,7 @@ Active ExecPlans (keep their `Progress` sections current; each is self-contained
 - `docs/EXECPLAN_REVIEW_SAVE_UX.md` - review-save UX: auto-save when a row is verified (✓), regenerate charts after a score-changing save, and show a post-run "N rows need checking" prompt in the finished panel. Complete (M1–M5; manual click-through confirmed 2026-06-30).
 - `docs/EXECPLAN_TOOLS_SOLVER_PARITY_PORT.md` - port the five post-PR#102 Rust OCR-solver capabilities (Prepend candidates, "1"→"2" swap, comma-leaked-total deletion, bonus-driven/single-char no-checksum fallbacks, multi-score-unsatisfiable flag) into the `gakumas-tools` web fork (`C:\Work\GitRepos\gakumas-tools\root-pr`), bringing `rehearsalRecovery.js` to parity with `src/ocr/reconcile.rs`. Keystone is provenance-tagged candidates so `cost()` is faithful. Plan kept here, NOT committed to the fork. Code-complete (M0–M6; branch `feature/rehearsal-solver-parity-root`, commits `c549037b..bd72f65c`): 23/23 unit vectors, e2e 8/8, and the 1200-row replay matches Rust exactly (`temp/tools-port-tests/replay.mjs`). **Contributed upstream as `surisuririsu/gakumas-tools#103`** (parity branch; carries the single-char base commit). Continues `docs/EXECPLAN_TOOLS_OVERLAP_PORT.md`.
 - `docs/EXECPLAN_LIVE_BOX_PLOT.md` - live nine-box score-distribution figure shown in a wide right-hand GUI side panel (box plot image + a live 6×9 Avg/Med/Max/Min/Q1/Q3 table) that updates as each iteration's OCR result lands; flagged rows excluded until verified. Data flows via a `LIVE_SCORES` global in `runner.rs` pushed from `ocr_worker.rs`; plotters renders to an in-memory RGBA buffer uploaded as an egui texture. Toggle defaults on and is persisted to `gui_settings.json`; the buffer is seeded from the newest session on launch and reloaded after review corrections/verifications. Code-complete (M1–M3 + polish; branch `feature/live-box-plot`); manual click-through against the live game pending.
-- `docs/EXECPLAN_TOOLS_REVIEW_FLAGGING.md` - separate follow-up in the `gakumas-tools` fork (branch `feature/rehearsal-review-flagging-root`): replace silent `[0,0,0]` zeroing of unverifiable rehearsal stages with keep-and-flag + highlight + "N rows need checking" + exclude-from-stats-until-verified, plus a total-confidence guard (portable analog of gakumas-screenshot `3be5b78`). Plan kept here, NOT committed to the fork. Code-complete (M1–M5; branch `feature/rehearsal-review-flagging-root`); zero-drop field check 0/700. **Contributed upstream as `surisuririsu/gakumas-tools#104`** (depends on #103; diff narrows to flagging-only once #103 merges).
+- `docs/EXECPLAN_TOOLS_REVIEW_FLAGGING.md` - separate follow-up in the `gakumas-tools` fork (branch `feature/rehearsal-review-flagging-root`): replace silent `[0,0,0]` zeroing of unverifiable rehearsal stages with keep-and-flag + highlight + "N rows need checking" + exclude-from-stats-until-verified, plus a total-confidence guard (portable analog of gakumas-rehearsal-automation `3be5b78`). Plan kept here, NOT committed to the fork. Code-complete (M1–M5; branch `feature/rehearsal-review-flagging-root`); zero-drop field check 0/700. **Contributed upstream as `surisuririsu/gakumas-tools#104`** (depends on #103; diff narrows to flagging-only once #103 merges).
 
 
 ## Project Overview
@@ -37,11 +37,11 @@ Build emits ~30 expected warnings (unused `pub use` re-exports, OCR dead code); 
 
 ```powershell
 # Build release (optimized with LTO). PREFER the guarded wrapper: a running app
-# instance locks gakumas-screenshot.exe, so a bare `cargo build --release` only
+# instance locks gakumas-rehearsal-automation.exe, so a bare `cargo build --release` only
 # fails at the LINK step after a full multi-minute compile ("failed to remove
-# file ... gakumas-screenshot.exe"). build.ps1 checks for a running instance
+# file ... gakumas-rehearsal-automation.exe"). build.ps1 checks for a running instance
 # FIRST and aborts in ~1s (pass -Kill to stop it automatically). Always run this
-# guard (or check `Get-Process gakumas-screenshot`) before building.
+# guard (or check `Get-Process gakumas-rehearsal-automation`) before building.
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1          # cargo build --release
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1 -Kill    # stop a running instance first
 cargo build --release                                                # bare form (only safe if the app is closed)
@@ -50,7 +50,7 @@ cargo build --release                                                # bare form
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 
 # Run
-.\target\release\gakumas-screenshot.exe
+.\target\release\gakumas-rehearsal-automation.exe
 ```
 
 ## Architecture
@@ -97,7 +97,7 @@ Key technical details:
 
 ## Design Constraints
 
-- **Admin privileges required**: The executable has a Windows manifest (`gakumas-screenshot.exe.manifest`) that requires administrator elevation. This is necessary for `SendInput` to work with elevated game processes.
+- **Admin privileges required**: The executable has a Windows manifest (`gakumas-rehearsal-automation.exe.manifest`) that requires administrator elevation. This is necessary for `SendInput` to work with elevated game processes.
 - **No command-line arguments**: This is a system tray application, not a CLI tool. All functionality should be accessed via tray menu, hotkeys, or config file. Do not add command-line argument handling.
 - **Testing limitations**: The admin manifest normally makes the `cargo test` harness require elevation (os error 740). Build tests with `GAKUMAS_NO_MANIFEST=1 cargo test` to skip embedding the manifest so unit tests run unelevated (the gate is in `build.rs`; normal/release builds still embed it). Pure-logic modules (`ocr::extract`, `ocr::reconcile`, `ocr::engine` parsing, `analysis`, `csv_writer`) are covered this way. Tesseract-dependent end-to-end checks are `#[ignore]`d and run explicitly, e.g. `GAKUMAS_NO_MANIFEST=1 cargo test ocr_overlap_recovery_e2e -- --ignored` (uses the embedded Tesseract + sample PNGs under `temp/`). Anything that drives the live tray app/hotkeys still must be tested manually.
 

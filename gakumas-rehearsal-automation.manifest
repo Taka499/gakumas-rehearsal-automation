@@ -3,10 +3,10 @@
   <assemblyIdentity
     version="1.0.0.0"
     processorArchitecture="*"
-    name="gakumas-screenshot"
+    name="gakumas-rehearsal-automation"
     type="win32"
   />
-  <description>Gakumas Screenshot Tool</description>
+  <description>Gakumas Rehearsal Automation</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

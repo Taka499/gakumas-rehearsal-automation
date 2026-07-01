@@ -1,8 +1,8 @@
-# Guarded release build for gakumas-screenshot.
+# Guarded release build for gakumas-rehearsal-automation.
 #
-# A running instance of gakumas-screenshot.exe holds an exclusive lock on the
+# A running instance of gakumas-rehearsal-automation.exe holds an exclusive lock on the
 # output binary, so a plain `cargo build --release` compiles for minutes and only
-# THEN fails at the link step ("failed to remove file ... gakumas-screenshot.exe").
+# THEN fails at the link step ("failed to remove file ... gakumas-rehearsal-automation.exe").
 # This wrapper checks for a running instance FIRST and aborts in a second, so no
 # compile time is wasted.
 #
@@ -19,15 +19,15 @@ param(
     [Parameter(ValueFromRemainingArguments = $true)] $CargoArgs
 )
 
-$proc = Get-Process gakumas-screenshot -ErrorAction SilentlyContinue
+$proc = Get-Process gakumas-rehearsal-automation -ErrorAction SilentlyContinue
 if ($proc) {
     if ($Kill) {
-        Write-Host "Stopping running gakumas-screenshot (PID $($proc.Id))..." -ForegroundColor Yellow
+        Write-Host "Stopping running gakumas-rehearsal-automation (PID $($proc.Id))..." -ForegroundColor Yellow
         $proc | Stop-Process -Force
         Start-Sleep -Milliseconds 600
     }
     else {
-        Write-Host "ERROR: gakumas-screenshot.exe is running (PID $($proc.Id))." -ForegroundColor Red
+        Write-Host "ERROR: gakumas-rehearsal-automation.exe is running (PID $($proc.Id))." -ForegroundColor Red
         Write-Host "It locks the output binary, so the build would fail at the link step after a full compile." -ForegroundColor Red
         Write-Host "Close it (tray -> 終了) and re-run, or pass -Kill to stop it automatically." -ForegroundColor Red
         exit 1

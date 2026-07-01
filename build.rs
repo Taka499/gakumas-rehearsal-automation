@@ -12,7 +12,7 @@ fn main() {
     // leave it unset and embed the manifest exactly as before.
     println!("cargo:rerun-if-env-changed=GAKUMAS_NO_MANIFEST");
     if env::var_os("GAKUMAS_NO_MANIFEST").is_none() {
-        let _ = embed_resource::compile("gakumas-screenshot.rc", embed_resource::NONE);
+        let _ = embed_resource::compile("gakumas-rehearsal-automation.rc", embed_resource::NONE);
     }
 
     // Copy resources and config to target directory
@@ -24,7 +24,7 @@ fn main() {
 /// Copies the template folder to the target directory so the executable can find reference images.
 fn copy_templates() {
     let out_dir = env::var("OUT_DIR").unwrap();
-    // OUT_DIR is something like target/release/build/gakumas-screenshot-xxx/out
+    // OUT_DIR is something like target/release/build/gakumas-rehearsal-automation-xxx/out
     // We need to go up to target/release (or target/debug)
     let out_path = Path::new(&out_dir);
     let target_dir = out_path

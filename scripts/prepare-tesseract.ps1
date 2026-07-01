@@ -21,7 +21,7 @@ $searchPaths = @(
     $TesseractPath,
     "C:\Program Files\Tesseract-OCR",
     "C:\Program Files (x86)\Tesseract-OCR",
-    "$env:LOCALAPPDATA\gakumas-screenshot\tesseract",
+    "$env:LOCALAPPDATA\gakumas-rehearsal-automation\tesseract",
     "$env:LOCALAPPDATA\Tesseract-OCR"
 )
 
