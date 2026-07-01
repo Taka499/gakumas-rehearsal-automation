@@ -113,7 +113,7 @@ pub fn find_gakumas_window() -> Result<HWND> {
                 ));
             }
 
-            // Check if this is exactly gakumas.exe (not gakumas-screenshot.exe, etc.)
+            // Check if this is exactly gakumas.exe (not gakumas-rehearsal-automation.exe, etc.)
             if process_name_lower == GAKUMAS_PROCESS_NAME {
                 data.hwnd = Some(hwnd);
                 data.process_name = Some(process_name);

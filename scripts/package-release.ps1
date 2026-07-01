@@ -1,4 +1,4 @@
-# Package release folder for gakumas-screenshot
+# Package release folder for gakumas-rehearsal-automation
 # Creates a portable release folder with proper directory structure.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
@@ -15,9 +15,9 @@ Write-Host ""
 
 # Guard: a running instance locks the output exe and would fail the build/copy
 # only after a full compile. Abort early with a clear message instead.
-$running = Get-Process gakumas-screenshot -ErrorAction SilentlyContinue
+$running = Get-Process gakumas-rehearsal-automation -ErrorAction SilentlyContinue
 if ($running) {
-    Write-Host "ERROR: gakumas-screenshot.exe is running (PID $($running.Id))." -ForegroundColor Red
+    Write-Host "ERROR: gakumas-rehearsal-automation.exe is running (PID $($running.Id))." -ForegroundColor Red
     Write-Host "Close it (tray -> 終了) before packaging — it locks the binary." -ForegroundColor Red
     exit 1
 }
@@ -33,7 +33,7 @@ Write-Host "Build successful." -ForegroundColor Green
 Write-Host ""
 
 # Create output structure
-$releaseDir = Join-Path $OutputDir "gakumas-screenshot"
+$releaseDir = Join-Path $OutputDir "gakumas-rehearsal-automation"
 Write-Host "Creating release folder: $releaseDir" -ForegroundColor Yellow
 
 if (Test-Path $releaseDir) {
@@ -57,13 +57,13 @@ Write-Host "  $releaseDir/resources/guide/"
 Write-Host ""
 
 # Copy executable
-$exePath = "target/release/gakumas-screenshot.exe"
+$exePath = "target/release/gakumas-rehearsal-automation.exe"
 if (-not (Test-Path $exePath)) {
     Write-Host "Error: Executable not found at $exePath" -ForegroundColor Red
     exit 1
 }
 Copy-Item $exePath $releaseDir
-Write-Host "Copied gakumas-screenshot.exe" -ForegroundColor Green
+Write-Host "Copied gakumas-rehearsal-automation.exe" -ForegroundColor Green
 
 # Copy config.json if exists
 if (Test-Path "config.json") {

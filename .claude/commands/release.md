@@ -1,4 +1,4 @@
-Push main and publish a new versioned GitHub release of gakumas-screenshot (build → package → zip → `gh release`). Use this whenever the user asks to "cut a release", "make a release", "publish a new version", "ship it", or "do a release" for this repo.
+Push main and publish a new versioned GitHub release of gakumas-rehearsal-automation (build → package → zip → `gh release`). Use this whenever the user asks to "cut a release", "make a release", "publish a new version", "ship it", or "do a release" for this repo.
 
 Usage: /release [optional version or one-line theme, e.g. "v0.4.0 additional runs"]
 
@@ -8,8 +8,8 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
 
 - **The release version is the git tag / `gh` release.** Find the latest with `gh release list`. Keep `Cargo.toml`'s `version` in sync: bump it to the release version and commit before tagging.
 - **Version bump convention:** new user-facing feature(s) → minor bump (`v0.X.0`); bug fix / small change → patch bump (`v0.X.Y`). This mirrors the existing history (v0.2.0, v0.3.0 were feature releases; v0.3.1–v0.3.3 were fixes).
-- **`scripts/package-release.ps1`** builds the optimized binary and assembles `release/gakumas-screenshot/` (exe + config.json + resources/). It does not zip and does not take a version.
-- **The release asset is a zip** named `gakumas-screenshot-vX.Y.Z.zip` whose top-level folder is `gakumas-screenshot/` (matches every prior release).
+- **`scripts/package-release.ps1`** builds the optimized binary and assembles `release/gakumas-rehearsal-automation/` (exe + config.json + resources/). It does not zip and does not take a version.
+- **The release asset is a zip** named `gakumas-rehearsal-automation-vX.Y.Z.zip` whose top-level folder is `gakumas-rehearsal-automation/` (matches every prior release).
 - **The binary requires administrator elevation** (Windows manifest) to run, because `SendInput` must drive an elevated game process.
 - Git on Windows prints `LF will be replaced by CRLF` warnings — these are noise, not errors.
 
@@ -40,26 +40,26 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
        ## New Features
        ### <feature> ...
        ## Install
-       Download `gakumas-screenshot-vX.Y.Z.zip`, extract, and run `gakumas-screenshot.exe` as administrator. Embedded Tesseract OCR extracts on first run.
+       Download `gakumas-rehearsal-automation-vX.Y.Z.zip`, extract, and run `gakumas-rehearsal-automation.exe` as administrator. Embedded Tesseract OCR extracts on first run.
        EOF
 
    Keep the notes focused on what the user can now do. Get the user's OK on the draft.
 
-6. **Build and package** (assembles `release/gakumas-screenshot/`):
+6. **Build and package** (assembles `release/gakumas-rehearsal-automation/`):
 
        powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 
-7. **Zip with the correct top-level folder** (run from repo root so `gakumas-screenshot/` is the archive root):
+7. **Zip with the correct top-level folder** (run from repo root so `gakumas-rehearsal-automation/` is the archive root):
 
-       powershell -Command "Compress-Archive -Path 'release/gakumas-screenshot' -DestinationPath 'gakumas-screenshot-vX.Y.Z.zip' -Force"
+       powershell -Command "Compress-Archive -Path 'release/gakumas-rehearsal-automation' -DestinationPath 'gakumas-rehearsal-automation-vX.Y.Z.zip' -Force"
 
-8. **Verify the zip structure** — the first entries must be under `gakumas-screenshot\...`, not loose files:
+8. **Verify the zip structure** — the first entries must be under `gakumas-rehearsal-automation\...`, not loose files:
 
-       unzip -l gakumas-screenshot-vX.Y.Z.zip | head -8
+       unzip -l gakumas-rehearsal-automation-vX.Y.Z.zip | head -8
 
 9. **Publish the release** (creates the tag at `main` and uploads the zip):
 
-       gh release create vX.Y.Z gakumas-screenshot-vX.Y.Z.zip \
+       gh release create vX.Y.Z gakumas-rehearsal-automation-vX.Y.Z.zip \
          --target main \
          --title "vX.Y.Z - <short theme>" \
          --notes-file /tmp/release-notes-vX.Y.Z.md
@@ -72,7 +72,7 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
 
     Report the release URL.
 
-11. **Cleanup (offer, don't assume).** The published zip also sits in the working dir; older `gakumas-screenshot-v*.zip` files may linger. Offer to delete superseded zips. Do NOT touch the tracked tree or commit anything here — these zips are untracked artifacts.
+11. **Cleanup (offer, don't assume).** The published zip also sits in the working dir; older `gakumas-rehearsal-automation-v*.zip` files may linger. Offer to delete superseded zips. Do NOT touch the tracked tree or commit anything here — these zips are untracked artifacts.
 
 ## Notes
 

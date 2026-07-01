@@ -1,4 +1,4 @@
-# gakumas-screenshot
+# gakumas-rehearsal-automation
 
 学園アイドルマスター (gakumas.exe) のクライアント領域をキャプチャするスクリーンショットツール。リハーサル自動化機能付き。
 
@@ -13,7 +13,7 @@
 
 ## 使い方
 
-1. `gakumas-screenshot.exe` を起動（管理者権限が必要）
+1. `gakumas-rehearsal-automation.exe` を起動（管理者権限が必要）
 2. システムトレイにアイコンが表示される
 3. ゲームを起動した状態で `Ctrl+Shift+S` を押す
 4. `screenshots/` フォルダに `gakumas_YYYYMMDD_HHMMSS.png` として保存される
@@ -22,8 +22,8 @@
 ## フォルダ構成
 
 ```
-gakumas-screenshot/
-├── gakumas-screenshot.exe  # 実行ファイル（Tesseract内蔵）
+gakumas-rehearsal-automation/
+├── gakumas-rehearsal-automation.exe  # 実行ファイル（Tesseract内蔵）
 ├── config.json             # 設定ファイル
 ├── logs/                   # ログファイル
 ├── screenshots/            # スクリーンショット保存先
@@ -44,7 +44,7 @@ cargo build --release
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ```
 
-出力: `release/gakumas-screenshot/`
+出力: `release/gakumas-rehearsal-automation/`
 
 ## 動作要件
 
@@ -73,7 +73,7 @@ Screenshot tool for capturing the client area of Gakuen iDOLM@STER (gakumas.exe)
 
 ## Usage
 
-1. Run `gakumas-screenshot.exe` (requires administrator privileges)
+1. Run `gakumas-rehearsal-automation.exe` (requires administrator privileges)
 2. An icon appears in the system tray
 3. With the game running, press `Ctrl+Shift+S`
 4. Screenshot is saved as `gakumas_YYYYMMDD_HHMMSS.png` in the `screenshots/` folder
@@ -82,8 +82,8 @@ Screenshot tool for capturing the client area of Gakuen iDOLM@STER (gakumas.exe)
 ## Folder Structure
 
 ```
-gakumas-screenshot/
-├── gakumas-screenshot.exe  # Executable (Tesseract embedded)
+gakumas-rehearsal-automation/
+├── gakumas-rehearsal-automation.exe  # Executable (Tesseract embedded)
 ├── config.json             # Configuration file
 ├── logs/                   # Log files
 ├── screenshots/            # Screenshot output
@@ -104,7 +104,7 @@ Create release package:
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ```
 
-Output: `release/gakumas-screenshot/`
+Output: `release/gakumas-rehearsal-automation/`
 
 ## Requirements
 
