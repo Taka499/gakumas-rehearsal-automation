@@ -461,6 +461,119 @@ pub fn generate_all_charts(
     Ok(paths)
 }
 
+/// Per-stage box colours shared by the on-disk combined plot and the live
+/// in-memory plot (Stage 1 red, Stage 2 green, Stage 3 blue).
+const STAGE_COLORS: [RGBColor; 3] = [
+    RGBColor(220, 80, 80),
+    RGBColor(80, 180, 80),
+    RGBColor(80, 120, 200),
+];
+/// Whisker/cap line colour.
+const WHISKER_COLOR: RGBColor = RGBColor(80, 80, 80);
+/// Median line colour.
+const MEDIAN_COLOR: RGBColor = RGBColor(200, 50, 50);
+/// Box half-width and whisker-cap half-width, in x-axis units (one column = 1.0).
+const BOX_HALF_WIDTH: f64 = 0.35;
+const CAP_HALF_WIDTH: f64 = 0.2;
+
+/// Stroke widths for one nine-box rendering. The live plot uses thicker
+/// strokes than the on-disk plot because its 1200px image is downscaled to
+/// the GUI panel width.
+struct BoxStrokes {
+    outline: u32,
+    median: u32,
+    whisker: u32,
+}
+
+/// Draws the nine box plots (box fill, outline, median, whiskers, caps) onto a
+/// prepared chart whose x-range is 0.0..9.0 and whose y-range already spans the
+/// data. Shared by `generate_combined_box_plot` (file) and
+/// `render_live_box_plot_rgba` (in-memory RGBA); only stroke widths differ.
+fn draw_nine_boxes<DB>(
+    chart: &mut ChartContext<
+        '_,
+        DB,
+        Cartesian2d<
+            plotters::coord::types::RangedCoordf64,
+            plotters::coord::types::RangedCoordf64,
+        >,
+    >,
+    stats: &super::statistics::DataSetStats,
+    strokes: BoxStrokes,
+) -> Result<()>
+where
+    DB: DrawingBackend,
+    DB::ErrorType: 'static,
+{
+    for (idx, col_stats) in stats.columns.iter().enumerate() {
+        let stage = idx / 3;
+        let x_center = idx as f64 + 0.5;
+        let box_color = STAGE_COLORS[stage];
+
+        let min_val = col_stats.min as f64;
+        let max_val = col_stats.max as f64;
+
+        // Box fill (Q1 to Q3)
+        chart.draw_series(std::iter::once(Rectangle::new(
+            [
+                (x_center - BOX_HALF_WIDTH, col_stats.quartile_1),
+                (x_center + BOX_HALF_WIDTH, col_stats.quartile_3),
+            ],
+            box_color.mix(0.4).filled(),
+        )))?;
+
+        // Box outline
+        chart.draw_series(std::iter::once(Rectangle::new(
+            [
+                (x_center - BOX_HALF_WIDTH, col_stats.quartile_1),
+                (x_center + BOX_HALF_WIDTH, col_stats.quartile_3),
+            ],
+            box_color.stroke_width(strokes.outline),
+        )))?;
+
+        // Median line
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![
+                (x_center - BOX_HALF_WIDTH, col_stats.median),
+                (x_center + BOX_HALF_WIDTH, col_stats.median),
+            ],
+            MEDIAN_COLOR.stroke_width(strokes.median),
+        )))?;
+
+        // Lower whisker
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![(x_center, min_val), (x_center, col_stats.quartile_1)],
+            WHISKER_COLOR.stroke_width(strokes.whisker),
+        )))?;
+
+        // Upper whisker
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![(x_center, col_stats.quartile_3), (x_center, max_val)],
+            WHISKER_COLOR.stroke_width(strokes.whisker),
+        )))?;
+
+        // Min cap
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![
+                (x_center - CAP_HALF_WIDTH, min_val),
+                (x_center + CAP_HALF_WIDTH, min_val),
+            ],
+            WHISKER_COLOR.stroke_width(strokes.whisker),
+        )))?;
+
+        // Max cap
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![
+                (x_center - CAP_HALF_WIDTH, max_val),
+                (x_center + CAP_HALF_WIDTH, max_val),
+            ],
+            WHISKER_COLOR.stroke_width(strokes.whisker),
+        )))?;
+    }
+
+    Ok(())
+}
+
 /// Generate a combined box plot showing all 9 columns side by side.
 pub fn generate_combined_box_plot(
     stats: &super::statistics::DataSetStats,
@@ -523,82 +636,15 @@ pub fn generate_combined_box_plot(
         lower.draw_text(label, &label_font.color(&BLACK), (x_pos, 5))?;
     }
 
-    // Stage colors
-    let stage_colors = [
-        RGBColor(220, 80, 80),   // Stage 1: Red
-        RGBColor(80, 180, 80),   // Stage 2: Green
-        RGBColor(80, 120, 200),  // Stage 3: Blue
-    ];
-
-    let box_width = 0.35;
-    let cap_width = 0.2;
-
-    for (idx, col_stats) in stats.columns.iter().enumerate() {
-        let stage = idx / 3;
-        let x_center = idx as f64 + 0.5;
-        let box_color = stage_colors[stage];
-        let whisker_color = RGBColor(80, 80, 80);
-
-        let min_val = col_stats.min as f64;
-        let max_val = col_stats.max as f64;
-
-        // Box fill (Q1 to Q3)
-        chart.draw_series(std::iter::once(Rectangle::new(
-            [
-                (x_center - box_width, col_stats.quartile_1),
-                (x_center + box_width, col_stats.quartile_3),
-            ],
-            box_color.mix(0.4).filled(),
-        )))?;
-
-        // Box outline
-        chart.draw_series(std::iter::once(Rectangle::new(
-            [
-                (x_center - box_width, col_stats.quartile_1),
-                (x_center + box_width, col_stats.quartile_3),
-            ],
-            box_color.stroke_width(2),
-        )))?;
-
-        // Median line
-        chart.draw_series(std::iter::once(PathElement::new(
-            vec![
-                (x_center - box_width, col_stats.median),
-                (x_center + box_width, col_stats.median),
-            ],
-            RGBColor(200, 50, 50).stroke_width(2),
-        )))?;
-
-        // Lower whisker
-        chart.draw_series(std::iter::once(PathElement::new(
-            vec![(x_center, min_val), (x_center, col_stats.quartile_1)],
-            whisker_color.stroke_width(1),
-        )))?;
-
-        // Upper whisker
-        chart.draw_series(std::iter::once(PathElement::new(
-            vec![(x_center, col_stats.quartile_3), (x_center, max_val)],
-            whisker_color.stroke_width(1),
-        )))?;
-
-        // Min cap
-        chart.draw_series(std::iter::once(PathElement::new(
-            vec![
-                (x_center - cap_width, min_val),
-                (x_center + cap_width, min_val),
-            ],
-            whisker_color.stroke_width(1),
-        )))?;
-
-        // Max cap
-        chart.draw_series(std::iter::once(PathElement::new(
-            vec![
-                (x_center - cap_width, max_val),
-                (x_center + cap_width, max_val),
-            ],
-            whisker_color.stroke_width(1),
-        )))?;
-    }
+    draw_nine_boxes(
+        &mut chart,
+        stats,
+        BoxStrokes {
+            outline: 2,
+            median: 2,
+            whisker: 1,
+        },
+    )?;
 
     root.present().context("Failed to save combined box plot")?;
     Ok(())
@@ -675,72 +721,15 @@ pub fn render_live_box_plot_rgba(
         let chart_width = LIVE_PLOT_W as i32 - chart_left - 20; // Total width minus margins
         let box_width_px = chart_width as f64 / 9.0;
 
-        // Stage colors (Stage 1 red, Stage 2 green, Stage 3 blue).
-        let stage_colors = [
-            RGBColor(220, 80, 80),
-            RGBColor(80, 180, 80),
-            RGBColor(80, 120, 200),
-        ];
-        let box_width = 0.35;
-        let cap_width = 0.2;
-        let whisker_color = RGBColor(80, 80, 80);
-
-        for (idx, col_stats) in stats.columns.iter().enumerate() {
-            let stage = idx / 3;
-            let x_center = idx as f64 + 0.5;
-            let box_color = stage_colors[stage];
-            let min_val = col_stats.min as f64;
-            let max_val = col_stats.max as f64;
-
-            // Box fill (Q1..Q3)
-            chart.draw_series(std::iter::once(Rectangle::new(
-                [
-                    (x_center - box_width, col_stats.quartile_1),
-                    (x_center + box_width, col_stats.quartile_3),
-                ],
-                box_color.mix(0.4).filled(),
-            )))?;
-            // Box outline
-            chart.draw_series(std::iter::once(Rectangle::new(
-                [
-                    (x_center - box_width, col_stats.quartile_1),
-                    (x_center + box_width, col_stats.quartile_3),
-                ],
-                box_color.stroke_width(3),
-            )))?;
-            // Median line
-            chart.draw_series(std::iter::once(PathElement::new(
-                vec![
-                    (x_center - box_width, col_stats.median),
-                    (x_center + box_width, col_stats.median),
-                ],
-                RGBColor(200, 50, 50).stroke_width(3),
-            )))?;
-            // Whiskers
-            chart.draw_series(std::iter::once(PathElement::new(
-                vec![(x_center, min_val), (x_center, col_stats.quartile_1)],
-                whisker_color.stroke_width(2),
-            )))?;
-            chart.draw_series(std::iter::once(PathElement::new(
-                vec![(x_center, col_stats.quartile_3), (x_center, max_val)],
-                whisker_color.stroke_width(2),
-            )))?;
-            // Min/max caps
-            chart.draw_series(std::iter::once(PathElement::new(
-                vec![
-                    (x_center - cap_width, min_val),
-                    (x_center + cap_width, min_val),
-                ],
-                whisker_color.stroke_width(2),
-            )))?;
-            chart.draw_series(std::iter::once(PathElement::new(
-                vec![
-                    (x_center - cap_width, max_val),
-                    (x_center + cap_width, max_val),
-                ],
-                whisker_color.stroke_width(2),
-            )))?;
-        }
+        draw_nine_boxes(
+            &mut chart,
+            stats,
+            BoxStrokes {
+                outline: 3,
+                median: 3,
+                whisker: 2,
+            },
+        )?;
 
         // Column labels (S1C1 ..) in the lower strip, centered under each box. The
         // lower area's local origin (0,0) is its top-left; the box area sits above it.
