@@ -4,6 +4,7 @@
 
 mod live_chart;
 pub mod render;
+mod review;
 pub mod state;
 
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -20,14 +21,12 @@ use crate::automation::runner::{
     extend_automation, get_progress, is_automation_running, resume_automation, start_automation,
     AutomationOutcome,
 };
-use crate::automation::results_edit::{
-    load_review_rows, save_review_rows, ReviewRow, RECOVERY_MANUAL, RECOVERY_VERIFIED,
-};
+use crate::automation::results_edit::load_review_rows;
 use crate::automation::state::request_abort;
 
 use live_chart::LiveChartCache;
-use render::ReviewActions;
-use state::{AutomationStatus, GuiState, ReviewState};
+use review::ReviewController;
+use state::{AutomationStatus, GuiState};
 
 /// Menu item IDs for tray menu
 const MENU_SHOW_WINDOW: &str = "show_window";
@@ -112,6 +111,8 @@ pub struct GuiApp {
     /// Cached live distribution figure (texture + stats + counts + change
     /// detection), owned together so the pieces can never drift apart.
     live_chart: LiveChartCache,
+    /// The OCR review/edit window's controller (open/preview/save lifecycle).
+    review: ReviewController,
     /// Whether the window is currently expanded to make room for the live plot
     /// side panel. Used to resize once on show/hide rather than every frame.
     live_chart_expanded: bool,
@@ -151,6 +152,7 @@ impl GuiApp {
             guide_images: [None, None],
             images_loaded: false,
             live_chart: LiveChartCache::new(),
+            review: ReviewController::new(),
             // Seed to match the persisted preference so the initial viewport size
             // (chosen in run_gui) is not resized on the first frame.
             live_chart_expanded: settings.show_live_chart,
@@ -637,155 +639,35 @@ impl GuiApp {
         }
     }
 
-    /// Builds the per-row editable text buffers from a row's scores.
-    fn edits_from_rows(rows: &[ReviewRow]) -> Vec<[[String; 3]; 3]> {
-        rows.iter()
-            .map(|r| {
-                let mut e: [[String; 3]; 3] = Default::default();
-                for s in 0..3 {
-                    for c in 0..3 {
-                        e[s][c] = r.scores[s][c].to_string();
-                    }
-                }
-                e
-            })
-            .collect()
-    }
-
     /// Handle "📝 結果を確認・修正" — load the latest session's results into the
     /// review/edit window.
     fn handle_open_review(&mut self) {
-        let path = match &self.state.latest_session_path {
-            Some(p) => p.clone(),
-            None => {
-                crate::log("GUI: 結果を確認 requested but no recent session is known");
-                return;
-            }
-        };
-        match load_review_rows(&path) {
-            Ok(rows) => {
-                let edits = Self::edits_from_rows(&rows);
-                self.state.review = Some(ReviewState {
-                    session_path: path,
-                    rows,
-                    edits,
-                    show_all: false,
-                    show_ok: false,
-                    show_repaired: true,
-                    show_flagged: true,
-                    show_manual: false,
-                    show_verified: false,
-                    search: String::new(),
-                    dirty: false,
-                    preview: None,
-                    expanded: None,
-                    open: true,
-                });
-                crate::log("GUI: Opened OCR result review window");
-            }
-            Err(e) => {
-                crate::log(&format!("GUI: Failed to load results for review: {}", e));
-            }
+        match &self.state.latest_session_path {
+            Some(p) => self.review.open(p.clone()),
+            None => crate::log("GUI: 結果を確認 requested but no recent session is known"),
         }
     }
 
-    /// Load one iteration's screenshot into the review preview pane (cached until
-    /// another row is chosen). No-op if it is already the previewed iteration.
-    fn load_review_preview(&mut self, ctx: &egui::Context, iteration: u32) {
-        let review = match self.state.review.as_mut() {
-            Some(r) => r,
-            None => return,
-        };
-        if review.preview.as_ref().map_or(false, |(i, _)| *i == iteration) {
-            return;
-        }
-        let path = match review.rows.iter().find(|r| r.iteration == iteration) {
-            Some(r) => r.screenshot.clone(),
-            None => return,
-        };
-        match image::open(&path) {
-            Ok(img) => {
-                let rgba = img.to_rgba8();
-                let size = [rgba.width() as usize, rgba.height() as usize];
-                let color = egui::ColorImage::from_rgba_unmultiplied(size, &rgba.into_raw());
-                let tex = ctx.load_texture(
-                    format!("review_preview_{}", iteration),
-                    color,
-                    egui::TextureOptions::LINEAR,
-                );
-                review.preview = Some((iteration, tex));
-            }
-            Err(e) => {
-                crate::log(&format!("GUI: Failed to open screenshot {}: {}", path, e));
-                review.preview = None;
-            }
-        }
-    }
-
-    /// Persist the review edits: parse each row's buffers, mark changed rows
-    /// `manual`, rewrite both CSVs, and re-seed the buffers from the saved rows.
-    fn handle_save_review(&mut self) {
-        let review = match self.state.review.as_mut() {
-            Some(r) => r,
-            None => return,
-        };
-        let mut changed = 0u32;
-        for (i, row) in review.rows.iter_mut().enumerate() {
-            let mut new_scores = row.scores;
-            let mut row_changed = false;
-            for s in 0..3 {
-                for c in 0..3 {
-                    match review.edits[i][s][c].trim().parse::<u32>() {
-                        Ok(v) => {
-                            if v != row.scores[s][c] {
-                                new_scores[s][c] = v;
-                                row_changed = true;
-                            }
-                        }
-                        // Non-numeric input: keep the prior value, reset the buffer.
-                        Err(_) => review.edits[i][s][c] = row.scores[s][c].to_string(),
-                    }
-                }
-            }
-            if row_changed {
-                row.scores = new_scores;
-                row.recovery = RECOVERY_MANUAL.to_string();
-                changed += 1;
-            }
-        }
-        let session_path = review.session_path.clone();
-        let saved = match save_review_rows(&session_path, &review.rows) {
-            Ok(()) => {
-                review.dirty = false;
-                review.edits = Self::edits_from_rows(&review.rows);
-                crate::log(&format!(
-                    "GUI: Saved review edits ({} row(s) marked manual) to {}",
-                    changed,
-                    session_path.display()
-                ));
-                true
-            }
-            Err(e) => {
-                crate::log(&format!("GUI: Failed to save review edits: {}", e));
-                false
-            }
-        };
-        // `review` is no longer used past this point, so the borrow on
-        // `self.state.review` is released and we can touch other state.
-        if saved {
+    /// Render the review/edit window (when open) and apply the cross-module
+    /// reactions to a save performed this frame. The window's own lifecycle
+    /// (open/preview/edit/save) lives in `ReviewController`; the reactions
+    /// below touch subsystems the review window should not own.
+    fn render_review_window(&mut self, ctx: &egui::Context) {
+        if let Some(effects) = self.review.show(ctx) {
             // Keep the finished-panel prompt's count in step with the saved
             // recovery flags (a verified/manual row leaves the attention set).
-            self.state.attention_counts = Some(Self::count_attention(&session_path));
+            self.state.attention_counts =
+                Some(Self::count_attention(&effects.session_path));
             // Refresh the live distribution from the saved CSV so the figure and table
             // reflect the corrected/verified values (verification can re-include a row
             // whose flag was cleared, which changes the stats without changing scores).
-            crate::automation::runner::reload_live_scores_from_csv(&session_path);
+            crate::automation::runner::reload_live_scores_from_csv(&effects.session_path);
             self.live_chart.invalidate();
             // Charts derive only from the scores, so regenerate them only when a
             // score actually changed; a verify-only save leaves them identical.
-            if changed > 0 {
+            if effects.scores_changed {
                 crate::log("GUI: Regenerating charts after review edits...");
-                match crate::analysis::generate_analysis_for_session(&session_path) {
+                match crate::analysis::generate_analysis_for_session(&effects.session_path) {
                     Ok((chart_paths, json_path)) => crate::log(&format!(
                         "GUI: Charts regenerated: {} files, stats: {}",
                         chart_paths.len(),
@@ -796,79 +678,9 @@ impl GuiApp {
                     }
                 }
             }
-        }
-    }
-
-    /// Render the review/edit window (when open) and dispatch its actions.
-    ///
-    /// The review lives in its OWN top-level OS window (an egui *immediate
-    /// viewport*), not a panel floating inside the main window, so it is resized
-    /// independently and is never clipped by the main window's bounds.
-    fn render_review_window(&mut self, ctx: &egui::Context) {
-        if !self.state.review.as_ref().map_or(false, |r| r.open) {
-            return;
-        }
-        let mut actions = ReviewActions::default();
-        ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("ocr_review_viewport"),
-            egui::ViewportBuilder::default()
-                .with_title("結果の確認・修正")
-                .with_inner_size([1200.0, 720.0])
-                .with_min_inner_size([700.0, 420.0])
-                // Match the main viewport: drag-and-drop off to avoid the
-                // RoInitialize (multithreaded COM) conflict noted in run_gui.
-                .with_drag_and_drop(false),
-            |vp_ctx, _class| {
-                egui::CentralPanel::default().show(vp_ctx, |ui| {
-                    let review = self.state.review.as_mut().unwrap();
-                    render::render_review_window_contents(ui, review, &mut actions);
-                });
-                if vp_ctx.input(|i| i.viewport().close_requested()) {
-                    actions.close = true;
-                }
-            },
-        );
-        if let Some(iter) = actions.toggle_expand {
-            // Toggle the expanded row; on expand, load that row's screenshot
-            // texture so the inline per-stage crops have a source to sample.
-            let expand = match self.state.review.as_mut() {
-                Some(r) => {
-                    if r.expanded == Some(iter) {
-                        r.expanded = None;
-                        false
-                    } else {
-                        r.expanded = Some(iter);
-                        true
-                    }
-                }
-                None => false,
-            };
-            if expand {
-                self.load_review_preview(ctx, iter);
-            }
-        }
-        if let Some(iter) = actions.mark_verified {
-            if let Some(review) = self.state.review.as_mut() {
-                if let Some(row) = review.rows.iter_mut().find(|r| r.iteration == iter) {
-                    row.recovery = RECOVERY_VERIFIED.to_string();
-                    review.dirty = true;
-                    crate::log(&format!("GUI: Marked iteration {} verified", iter));
-                }
-            }
-        }
-        // A verify click persists immediately (no separate 保存 needed). It
-        // routes through the one save path, so an unedited verified row saves as
-        // `verified` while a row also edited this frame wins as `manual`.
-        if actions.save || actions.mark_verified.is_some() {
-            self.handle_save_review();
-            // handle_save_review marks the live figure dirty; ensure the main viewport
+            // The save marked the live figure dirty; ensure the main viewport
             // runs another frame to pick up the refreshed distribution.
             ctx.request_repaint();
-        }
-        if actions.close {
-            if let Some(r) = self.state.review.as_mut() {
-                r.open = false;
-            }
         }
     }
 
