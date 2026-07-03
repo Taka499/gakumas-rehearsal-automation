@@ -15,7 +15,7 @@ use crate::automation::config::get_config;
 use crate::automation::csv_writer::init_csv;
 use crate::automation::ocr_worker::run_ocr_worker;
 use crate::automation::queue::create_work_queue;
-use crate::automation::state::{reset_abort_flag, AutomationContext, AutomationState};
+use crate::automation::state::{reset_abort_flag, AutomationContext, AutomationState, LiveGame};
 use crate::capture::find_gakumas_window;
 
 /// Global flag indicating if automation is currently running.
@@ -371,9 +371,10 @@ fn run_automation_loop(
         run_ocr_worker(receiver, csv_path_clone, regions);
     });
 
-    // Create and run state machine
+    // Create and run state machine, driving the live game window.
+    let game = LiveGame::new(hwnd, config);
     let mut ctx = AutomationContext::new(
-        hwnd, config, max_iterations, start_iteration, sender, screenshot_dir,
+        game, max_iterations, start_iteration, sender, screenshot_dir,
     );
 
     // Run state machine until complete

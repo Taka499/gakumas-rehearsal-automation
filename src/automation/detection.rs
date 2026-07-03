@@ -11,13 +11,11 @@
 use anyhow::{anyhow, Result};
 use image::{ImageBuffer, Rgba};
 use std::path::Path;
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::HWND;
 
 use crate::automation::config::{AutomationConfig, RelativeRect};
 use crate::automation::input::click_at_relative;
-use crate::automation::state::ABORT_REQUESTED;
 use crate::capture::region::capture_region;
 
 /// Calculates the average brightness (luminance) of an image.
@@ -225,10 +223,15 @@ pub fn save_end_button_reference(hwnd: HWND, config: &AutomationConfig, path: &P
 /// Phase 2: Wait for Skip button to become enabled (brightness exceeds threshold)
 ///
 /// If no reference image exists, falls back to brightness-only detection.
+///
+/// `abort` is polled inside the wait loops; when it returns true the wait ends
+/// with an error (injected by the caller so this module has no dependency on
+/// the global abort flag).
 pub fn wait_for_loading(
     hwnd: HWND,
     config: &AutomationConfig,
     click_retry: Option<ClickRetryInfo<'_>>,
+    abort: &dyn Fn() -> bool,
 ) -> Result<()> {
     let start = Instant::now();
     let timeout = Duration::from_millis(config.loading_timeout_ms);
@@ -272,7 +275,7 @@ pub fn wait_for_loading(
         let confirm_needed = config.detection_confirm_count.max(1);
         let mut consecutive_matches: u32 = 0;
         loop {
-            if ABORT_REQUESTED.load(Ordering::SeqCst) {
+            if abort() {
                 return Err(anyhow!("Abort requested"));
             }
 
@@ -326,7 +329,7 @@ pub fn wait_for_loading(
     // Phase 2: Wait for Skip button to become enabled (brightness)
     crate::log("Phase 2: Waiting for Skip button to become enabled...");
     loop {
-        if ABORT_REQUESTED.load(Ordering::SeqCst) {
+        if abort() {
             return Err(anyhow!("Abort requested"));
         }
 
@@ -369,10 +372,13 @@ pub fn measure_region_brightness(hwnd: HWND, config: &AutomationConfig) -> Resul
 /// Returns Ok(()) when the End button is detected, or Err on timeout or abort.
 ///
 /// If no reference image exists, falls back to a fixed delay.
+///
+/// `abort` is polled inside the wait loop; see `wait_for_loading`.
 pub fn wait_for_result(
     hwnd: HWND,
     config: &AutomationConfig,
     click_retry: Option<ClickRetryInfo<'_>>,
+    abort: &dyn Fn() -> bool,
 ) -> Result<()> {
     let start = Instant::now();
     let timeout = Duration::from_millis(config.result_timeout_ms);
@@ -427,7 +433,7 @@ pub fn wait_for_result(
     let confirm_needed = config.detection_confirm_count.max(1);
     let mut consecutive_matches: u32 = 0;
     loop {
-        if ABORT_REQUESTED.load(Ordering::SeqCst) {
+        if abort() {
             return Err(anyhow!("Abort requested"));
         }
 
@@ -484,10 +490,13 @@ pub fn wait_for_result(
 /// Returns Ok(()) when the Start button is detected, or Err on timeout or abort.
 ///
 /// If no reference image exists, returns immediately (assumes page is ready).
+///
+/// `abort` is polled inside the wait loop; see `wait_for_loading`.
 pub fn wait_for_start_page(
     hwnd: HWND,
     config: &AutomationConfig,
     click_retry: Option<ClickRetryInfo<'_>>,
+    abort: &dyn Fn() -> bool,
 ) -> Result<()> {
     let start = Instant::now();
     let timeout = Duration::from_millis(config.loading_timeout_ms);
@@ -537,7 +546,7 @@ pub fn wait_for_start_page(
     let confirm_needed = config.detection_confirm_count.max(1);
     let mut consecutive_matches: u32 = 0;
     loop {
-        if ABORT_REQUESTED.load(Ordering::SeqCst) {
+        if abort() {
             return Err(anyhow!("Abort requested"));
         }
 
