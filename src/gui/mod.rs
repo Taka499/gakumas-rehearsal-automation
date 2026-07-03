@@ -2,6 +2,7 @@
 //!
 //! Provides a graphical interface using egui/eframe for user interaction.
 
+mod live_chart;
 pub mod render;
 pub mod state;
 
@@ -24,6 +25,7 @@ use crate::automation::results_edit::{
 };
 use crate::automation::state::request_abort;
 
+use live_chart::LiveChartCache;
 use render::ReviewActions;
 use state::{AutomationStatus, GuiState, ReviewState};
 
@@ -107,21 +109,9 @@ pub struct GuiApp {
     guide_images: [Option<TextureHandle>; 2],
     /// Flag to track if images have been loaded.
     images_loaded: bool,
-    /// Cached live distribution figure texture, rebuilt while a run is in progress.
-    /// Lives here (not on `GuiState`) because `TextureHandle` is not `Debug`.
-    live_chart_tex: Option<TextureHandle>,
-    /// Live-buffer row count the cached `live_chart_tex` was rendered from; used to
-    /// re-render the figure only when new iteration data has arrived.
-    live_chart_rendered_count: usize,
-    /// Latest per-column statistics for the live table (parallel to `live_chart_tex`).
-    live_chart_stats: Option<crate::analysis::statistics::DataSetStats>,
-    /// Included run count and flagged-excluded count for the live figure's heading.
-    live_chart_total: usize,
-    live_chart_excluded: usize,
-    /// Forces a live-figure re-render on the next frame even if the buffer row count
-    /// is unchanged. Set after a review save so manual corrections / verifications
-    /// (which can change values or flags without changing the row count) are reflected.
-    live_chart_dirty: bool,
+    /// Cached live distribution figure (texture + stats + counts + change
+    /// detection), owned together so the pieces can never drift apart.
+    live_chart: LiveChartCache,
     /// Whether the window is currently expanded to make room for the live plot
     /// side panel. Used to resize once on show/hide rather than every frame.
     live_chart_expanded: bool,
@@ -160,12 +150,7 @@ impl GuiApp {
             state,
             guide_images: [None, None],
             images_loaded: false,
-            live_chart_tex: None,
-            live_chart_rendered_count: 0,
-            live_chart_stats: None,
-            live_chart_total: 0,
-            live_chart_excluded: 0,
-            live_chart_dirty: false,
+            live_chart: LiveChartCache::new(),
             // Seed to match the persisted preference so the initial viewport size
             // (chosen in run_gui) is not resized on the first frame.
             live_chart_expanded: settings.show_live_chart,
@@ -319,43 +304,7 @@ impl GuiApp {
     /// buffer but not plotted) until verified. Cheap on idle frames thanks to the
     /// row-count guard; only re-renders on a new data point.
     fn update_live_chart(&mut self, ctx: &egui::Context) {
-        if !self.state.show_live_chart {
-            return;
-        }
-
-        let count = crate::automation::runner::live_score_count();
-        if !self.live_chart_dirty
-            && count == self.live_chart_rendered_count
-            && self.live_chart_tex.is_some()
-        {
-            return; // No new data and not force-invalidated since the last render.
-        }
-
-        let rows = crate::automation::runner::get_live_scores();
-        let included: Vec<[[u32; 3]; 3]> = rows
-            .iter()
-            .filter(|r| !r.flagged)
-            .map(|r| r.scores)
-            .collect();
-        let excluded = rows.len() - included.len();
-        let stats = crate::analysis::statistics::DataSetStats::from_score_rows(&included);
-
-        match crate::analysis::charts::render_live_box_plot_rgba(&stats) {
-            Ok((w, h, rgba)) => {
-                let color =
-                    egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
-                let tex = ctx.load_texture("live_box_plot", color, egui::TextureOptions::LINEAR);
-                self.live_chart_tex = Some(tex);
-                self.live_chart_total = included.len();
-                self.live_chart_excluded = excluded;
-                self.live_chart_stats = Some(stats);
-                self.live_chart_rendered_count = count;
-                self.live_chart_dirty = false;
-            }
-            Err(e) => {
-                crate::log(&format!("Live distribution: render failed ({})", e));
-            }
-        }
+        self.live_chart.update(ctx, self.state.show_live_chart);
     }
 
     /// Update automation status by polling the automation runner.
@@ -832,7 +781,7 @@ impl GuiApp {
             // reflect the corrected/verified values (verification can re-include a row
             // whose flag was cleared, which changes the stats without changing scores).
             crate::automation::runner::reload_live_scores_from_csv(&session_path);
-            self.live_chart_dirty = true;
+            self.live_chart.invalidate();
             // Charts derive only from the scores, so regenerate them only when a
             // score actually changed; a verify-only save leaves them identical.
             if changed > 0 {
@@ -1026,16 +975,17 @@ impl eframe::App for GuiApp {
                         .show(ui, |ui| {
                             ui.add_space(4.0);
                             ui.heading("スコア分布（ライブ）");
+                            let (included, excluded) = self.live_chart.counts();
                             ui.label(
                                 egui::RichText::new(format!(
                                     "{} 件（除外フラグ {} 件）",
-                                    self.live_chart_total, self.live_chart_excluded
+                                    included, excluded
                                 ))
                                 .small()
                                 .weak(),
                             );
                             ui.add_space(6.0);
-                            if let Some(tex) = &self.live_chart_tex {
+                            if let Some(tex) = self.live_chart.texture() {
                                 // Scale to the panel width, preserving the figure's aspect.
                                 let w = ui.available_width();
                                 let size = tex.size();
@@ -1043,7 +993,7 @@ impl eframe::App for GuiApp {
                                 ui.image((tex.id(), Vec2::new(w, w * aspect)));
                             }
                             ui.add_space(10.0);
-                            if let Some(stats) = &self.live_chart_stats {
+                            if let Some(stats) = self.live_chart.stats() {
                                 render::render_live_stats_table(ui, stats);
                             }
                         });
