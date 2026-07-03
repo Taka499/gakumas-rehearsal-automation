@@ -365,12 +365,10 @@ fn run_automation_loop(
     let (sender, receiver) = create_work_queue();
 
     // Spawn OCR worker thread
-    let score_regions = config.score_regions;
-    let total_regions = config.total_regions;
-    let bonus_regions = config.bonus_regions;
+    let regions = config.ocr_regions();
     let csv_path_clone = csv_path.clone();
     let ocr_handle = thread::spawn(move || {
-        run_ocr_worker(receiver, csv_path_clone, score_regions, total_regions, bonus_regions);
+        run_ocr_worker(receiver, csv_path_clone, regions);
     });
 
     // Create and run state machine
