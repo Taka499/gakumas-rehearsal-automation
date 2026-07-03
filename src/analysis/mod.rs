@@ -90,7 +90,7 @@ pub fn generate_analysis_for_session(session_dir: &Path) -> Result<(Vec<PathBuf>
 /// Falls back to legacy behavior if no session is active.
 pub fn generate_analysis() -> Result<(Vec<PathBuf>, PathBuf)> {
     // Try to use current session path from runner
-    if let Some(session_dir) = crate::automation::runner::get_current_session_path() {
+    if let Some(session_dir) = crate::automation::runner::get_progress().session_path {
         return generate_analysis_for_session(&session_dir);
     }
 
