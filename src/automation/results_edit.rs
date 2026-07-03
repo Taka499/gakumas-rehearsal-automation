@@ -16,6 +16,10 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+/// The `results.csv` header, shared with the writer so a schema change is a
+/// single edit (`crate::automation::csv_writer::CSV_HEADER`).
+use crate::automation::csv_writer::CSV_HEADER;
+
 /// One reviewable/editable result row, mirroring a `results.csv` line.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReviewRow {
@@ -39,9 +43,6 @@ pub const RECOVERY_MANUAL: &str = "manual";
 /// The recovery marker for a flagged/repaired row the user reviewed and confirmed
 /// correct without editing it (resolves the flag while preserving the data).
 pub const RECOVERY_VERIFIED: &str = "verified";
-
-const CSV_HEADER: &str =
-    "iteration,timestamp,screenshot,s1c1,s1c2,s1c3,s2c1,s2c2,s2c3,s3c1,s3c2,s3c3,recovery";
 
 fn results_path(session_dir: &Path) -> PathBuf {
     session_dir.join("results.csv")

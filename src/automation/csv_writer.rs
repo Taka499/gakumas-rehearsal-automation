@@ -18,7 +18,7 @@ use std::path::Path;
 /// the first 12 by position (see `analysis::csv_reader`), so older `results.csv`
 /// files that lack it remain readable; when resuming such a file the header is
 /// preserved (it simply won't name the trailing column).
-const CSV_HEADER: &str = "iteration,timestamp,screenshot,s1c1,s1c2,s1c3,s2c1,s2c2,s2c3,s3c1,s3c2,s3c3,recovery";
+pub(crate) const CSV_HEADER: &str = "iteration,timestamp,screenshot,s1c1,s1c2,s1c3,s2c1,s2c2,s2c3,s3c1,s3c2,s3c3,recovery";
 
 /// Initializes CSV file with header if it doesn't exist or is empty.
 ///
