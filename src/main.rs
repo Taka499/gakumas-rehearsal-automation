@@ -593,7 +593,7 @@ fn test_ocr() {
     let config = automation::get_config();
     let threshold = config.ocr_threshold;
 
-    match ocr::ocr_screenshot(&img, &config.score_regions, &config.total_regions, &config.bonus_regions) {
+    match ocr::ocr_screenshot(&img, &config.ocr_regions()) {
         Ok(readout) => {
             let scores = readout.scores;
             log("OCR succeeded!");

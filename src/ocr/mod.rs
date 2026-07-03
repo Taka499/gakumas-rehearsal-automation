@@ -13,7 +13,7 @@ pub use reconcile::Recovery;
 use anyhow::Result;
 use image::{ImageBuffer, Rgba};
 
-use crate::automation::config::RelativeRect;
+use crate::automation::config::OcrRegions;
 use preprocess::{blue_mask, crop_region};
 use engine::{recognize_image_line, recognize_single_number};
 use extract::extract_single_stage;
@@ -50,9 +50,7 @@ const TOTAL_ALT_THRESHOLDS: &[u8] = &[180, 220, 190, 200, 230, 170, 240];
 /// a failed total/bonus reads as `None` and simply disables the checksum tier.
 pub fn ocr_screenshot(
     img: &ImageBuffer<Rgba<u8>, Vec<u8>>,
-    score_regions: &[RelativeRect; 3],
-    total_regions: &[RelativeRect; 3],
-    bonus_regions: &[RelativeRect; 3],
+    regions: &OcrRegions,
 ) -> Result<StageReadout> {
     let config = crate::automation::config::get_config();
     let threshold = config.ocr_threshold;
@@ -69,18 +67,18 @@ pub fn ocr_screenshot(
 
     for stage_idx in 0..3 {
         // Score row.
-        let score_crop = crop_region(img, &score_regions[stage_idx]);
+        let score_crop = crop_region(img, &regions.score[stage_idx]);
         let score_bin = threshold_bright_pixels(&score_crop, threshold);
         let lines = recognize_image_line(&score_bin)?;
         readout.scores[stage_idx] = extract_single_stage(&lines)?;
 
         // Stage total: white text, same luminance threshold style as score rows.
-        let total_crop = crop_region(img, &total_regions[stage_idx]);
+        let total_crop = crop_region(img, &regions.total[stage_idx]);
         let total_bin = threshold_bright_pixels(&total_crop, total_threshold);
         readout.totals[stage_idx] = recognize_single_number(&total_bin, "0123456789,", false)?;
 
         // Bonus badge: light-blue text, blue-selective mask, "+"-anchored parse.
-        let bonus_crop = crop_region(img, &bonus_regions[stage_idx]);
+        let bonus_crop = crop_region(img, &regions.bonus[stage_idx]);
         let bonus_bin = blue_mask(&bonus_crop, bonus_blue_min, bonus_br_margin);
         readout.bonuses[stage_idx] = recognize_single_number(&bonus_bin, "0123456789+", true)?;
 
@@ -209,7 +207,7 @@ mod e2e_tests {
             let img = image::open(path)
                 .unwrap_or_else(|e| panic!("open {path}: {e}"))
                 .to_rgba8();
-            let r = ocr_screenshot(&img, &config.score_regions, &config.total_regions, &config.bonus_regions)
+            let r = ocr_screenshot(&img, &config.ocr_regions())
                 .unwrap_or_else(|e| panic!("ocr {path}: {e}"));
             println!(
                 "{path}\n  stage2 scores={:?} total={:?} bonus={:?} flag={:?}",

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
-use crate::automation::config::RelativeRect;
+use crate::automation::config::OcrRegions;
 use crate::automation::csv_writer::{append_to_csv, append_to_raw_csv};
 use crate::automation::queue::OcrWorkItem;
 use crate::ocr::{ocr_screenshot, Recovery};
@@ -32,9 +32,7 @@ fn worst_recovery(flags: &[Recovery; 3]) -> Recovery {
 pub fn run_ocr_worker(
     receiver: Receiver<OcrWorkItem>,
     csv_path: PathBuf,
-    score_regions: [RelativeRect; 3],
-    total_regions: [RelativeRect; 3],
-    bonus_regions: [RelativeRect; 3],
+    regions: OcrRegions,
 ) {
     crate::log("OCR worker started");
 
@@ -61,7 +59,7 @@ pub fn run_ocr_worker(
                 };
 
                 // Run OCR
-                let readout = match ocr_screenshot(&img, &score_regions, &total_regions, &bonus_regions) {
+                let readout = match ocr_screenshot(&img, &regions) {
                     Ok(readout) => readout,
                     Err(e) => {
                         crate::log(&format!(
@@ -162,13 +160,16 @@ mod tests {
             RelativeRect { x: 0.0, y: 0.418, width: 1.0, height: 0.035 },
             RelativeRect { x: 0.0, y: 0.670, width: 1.0, height: 0.035 },
         ];
-        let total_regions = score_regions;
-        let bonus_regions = score_regions;
+        let regions = OcrRegions {
+            score: score_regions,
+            total: score_regions,
+            bonus: score_regions,
+        };
 
         // Spawn worker
         let csv_path_clone = csv_path.clone();
         let handle = thread::spawn(move || {
-            run_ocr_worker(receiver, csv_path_clone, score_regions, total_regions, bonus_regions);
+            run_ocr_worker(receiver, csv_path_clone, regions);
         });
 
         // Drop sender to close channel

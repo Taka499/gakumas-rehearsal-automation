@@ -95,6 +95,31 @@ pub fn review_crop_rect(config: &AutomationConfig, stage: usize) -> RelativeRect
     }
 }
 
+/// The three per-stage OCR crop-region arrays, bundled so callers pass one
+/// value instead of three parallel arrays. A *view* built from (not replacing)
+/// the individually-serialized `AutomationConfig` fields, so existing config
+/// files keep working unchanged.
+#[derive(Clone, Copy, Debug)]
+pub struct OcrRegions {
+    /// Score-row crop per stage (the nine per-character values).
+    pub score: [RelativeRect; 3],
+    /// Isolated stage-total crop per stage (checksum source).
+    pub total: [RelativeRect; 3],
+    /// Bonus-badge crop per stage (checksum cross-check).
+    pub bonus: [RelativeRect; 3],
+}
+
+impl AutomationConfig {
+    /// Bundle the three OCR region arrays for passing through the OCR pipeline.
+    pub fn ocr_regions(&self) -> OcrRegions {
+        OcrRegions {
+            score: self.score_regions,
+            total: self.total_regions,
+            bonus: self.bonus_regions,
+        }
+    }
+}
+
 /// A point in relative coordinates for button centers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ButtonConfig {

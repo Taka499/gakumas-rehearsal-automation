@@ -18,8 +18,8 @@ pub mod session_meta;
 pub mod state;
 
 pub use config::{
-    get_config, init_config, review_crop_rect, AutomationConfig, ButtonConfig, RelativeRect,
-    ReviewCropAdjust,
+    get_config, init_config, review_crop_rect, AutomationConfig, ButtonConfig, OcrRegions,
+    RelativeRect, ReviewCropAdjust,
 };
 pub use detection::{
     calculate_brightness, check_button_similarity, load_reference_histogram,
