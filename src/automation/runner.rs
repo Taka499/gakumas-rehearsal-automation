@@ -7,7 +7,7 @@ use anyhow::{anyhow, Result};
 use chrono::Local;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
 
@@ -19,13 +19,10 @@ use crate::automation::state::{reset_abort_flag, AutomationContext, AutomationSt
 use crate::capture::find_gakumas_window;
 
 /// Global flag indicating if automation is currently running.
+///
+/// Kept as a separate atomic (not a `PROGRESS` field) because its `swap` is
+/// the mutual-exclusion guard for starting a run.
 static AUTOMATION_RUNNING: AtomicBool = AtomicBool::new(false);
-
-/// Current iteration counter (for GUI progress display).
-static CURRENT_ITERATION: AtomicU32 = AtomicU32::new(0);
-
-/// Total iterations for current run (for GUI progress display).
-static TOTAL_ITERATIONS: AtomicU32 = AtomicU32::new(0);
 
 /// One row of live OCR scores for the in-progress run's distribution view.
 ///
@@ -108,12 +105,6 @@ fn seed_live_scores_from_csv(session_dir: &Path) {
     }
 }
 
-/// Current state description (for GUI progress display).
-static CURRENT_STATE_DESC: Mutex<String> = Mutex::new(String::new());
-
-/// Current session folder path (for GUI to access after completion).
-static CURRENT_SESSION_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
-
 /// Final outcome of the most recent automation run (for GUI to read after the
 /// automation thread exits). Distinguishes a full completion from a timeout/error
 /// or a user abort, and records how many of the requested runs actually finished.
@@ -131,8 +122,32 @@ pub enum AutomationOutcome {
     },
 }
 
-/// Outcome of the most recently finished automation run.
-static LAST_OUTCOME: Mutex<Option<AutomationOutcome>> = Mutex::new(None);
+/// Everything the GUI needs to display about the current (or most recent) run,
+/// updated together under one lock so a reader never sees a mixed state (e.g.
+/// the new run's iteration paired with the old run's session path).
+#[derive(Clone, Debug)]
+pub struct Progress {
+    /// Current iteration number (0 before the first iteration starts).
+    pub current_iteration: u32,
+    /// Total iterations requested for the current run.
+    pub total_iterations: u32,
+    /// Japanese description of the state machine's current state.
+    pub state_desc: String,
+    /// Session folder of the current/most recent run.
+    pub session_path: Option<PathBuf>,
+    /// Outcome of the most recently finished run. `None` while a run is in
+    /// progress (cleared at run start) or before any run has finished.
+    pub last_outcome: Option<AutomationOutcome>,
+}
+
+/// Single source of truth for run progress, read by the GUI once per frame.
+static PROGRESS: Mutex<Progress> = Mutex::new(Progress {
+    current_iteration: 0,
+    total_iterations: 0,
+    state_desc: String::new(),
+    session_path: None,
+    last_outcome: None,
+});
 
 /// Default number of iterations if not specified in config.
 const DEFAULT_ITERATIONS: u32 = 10;
@@ -142,67 +157,21 @@ pub fn is_automation_running() -> bool {
     AUTOMATION_RUNNING.load(Ordering::SeqCst)
 }
 
-/// Gets the current iteration number (0-based, for GUI progress display).
-pub fn get_current_iteration() -> u32 {
-    CURRENT_ITERATION.load(Ordering::SeqCst)
-}
-
-/// Gets the total number of iterations for current run.
-pub fn get_total_iterations() -> u32 {
-    TOTAL_ITERATIONS.load(Ordering::SeqCst)
-}
-
-/// Gets the current state description (for GUI progress display).
-pub fn get_current_state_description() -> String {
-    CURRENT_STATE_DESC
+/// Returns a snapshot of the current run progress. Callers should take one
+/// snapshot per frame/decision and read fields from it, rather than calling
+/// repeatedly, so all values describe the same moment.
+pub fn get_progress() -> Progress {
+    PROGRESS
         .lock()
-        .map(|s| s.clone())
-        .unwrap_or_else(|_| "不明".to_string())
+        .map(|p| p.clone())
+        .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
 }
 
-/// Updates the current state description (called from automation thread).
-fn update_state_description(desc: &str) {
-    if let Ok(mut s) = CURRENT_STATE_DESC.lock() {
-        *s = desc.to_string();
-    }
-}
-
-/// Gets the current session folder path (for GUI to access).
-pub fn get_current_session_path() -> Option<PathBuf> {
-    CURRENT_SESSION_PATH
-        .lock()
-        .ok()
-        .and_then(|p| p.clone())
-}
-
-/// Sets the current session folder path (called at automation start).
-fn set_current_session_path(path: PathBuf) {
-    if let Ok(mut p) = CURRENT_SESSION_PATH.lock() {
-        *p = Some(path);
-    }
-}
-
-/// Gets the outcome of the most recently finished automation run.
-///
-/// Returns `None` if no run has finished yet (e.g. one is still in progress, or
-/// the outcome was cleared at the start of a new run).
-pub fn get_last_outcome() -> Option<AutomationOutcome> {
-    LAST_OUTCOME.lock().ok().and_then(|o| o.clone())
-}
-
-/// Sets the outcome of the just-finished automation run (called from the
-/// automation thread before it clears the running flag).
-fn set_last_outcome(outcome: AutomationOutcome) {
-    if let Ok(mut o) = LAST_OUTCOME.lock() {
-        *o = Some(outcome);
-    }
-}
-
-/// Clears the stored outcome (called when a new run starts) so the GUI never
-/// reads a stale result from a previous run.
-fn clear_last_outcome() {
-    if let Ok(mut o) = LAST_OUTCOME.lock() {
-        *o = None;
+/// The single mutation path for `PROGRESS` (runner-internal).
+fn progress_update(f: impl FnOnce(&mut Progress)) {
+    match PROGRESS.lock() {
+        Ok(mut p) => f(&mut p),
+        Err(poisoned) => f(&mut poisoned.into_inner()),
     }
 }
 
@@ -279,7 +248,8 @@ fn start_automation_inner(
     }
 
     reset_abort_flag();
-    clear_last_outcome();
+    // Clear the previous run's outcome so the GUI never reads a stale result.
+    progress_update(|p| p.last_outcome = None);
     clear_live_scores();
 
     let hwnd = match find_gakumas_window() {
@@ -306,7 +276,8 @@ fn start_automation_inner(
         return Err(anyhow!("Failed to create session directory: {}", e));
     }
 
-    set_current_session_path(session_dir.clone());
+    let session_dir_for_progress = session_dir.clone();
+    progress_update(move |p| p.session_path = Some(session_dir_for_progress));
 
     let session_log_path = session_dir.join("session.log");
     crate::set_session_log(Some(session_log_path.clone()));
@@ -331,9 +302,11 @@ fn start_automation_inner(
     }
 
     // Seed progress with already-completed runs so the bar resumes correctly.
-    CURRENT_ITERATION.store(start_iteration.saturating_sub(1), Ordering::SeqCst);
-    TOTAL_ITERATIONS.store(iterations, Ordering::SeqCst);
-    update_state_description(if is_resume { "再開中..." } else { "開始中..." });
+    progress_update(|p| {
+        p.current_iteration = start_iteration.saturating_sub(1);
+        p.total_iterations = iterations;
+        p.state_desc = (if is_resume { "再開中..." } else { "開始中..." }).to_string();
+    });
 
     // Record metadata so this run can be discovered/resumed later (M1 module).
     crate::automation::session_meta::write_meta(
@@ -408,8 +381,10 @@ fn run_automation_loop(
     // Run state machine until complete
     loop {
         // Update progress counters for GUI
-        CURRENT_ITERATION.store(ctx.current_iteration, Ordering::SeqCst);
-        update_state_description(&ctx.state.description_ja());
+        progress_update(|p| {
+            p.current_iteration = ctx.current_iteration;
+            p.state_desc = ctx.state.description_ja();
+        });
 
         match ctx.step() {
             Ok(true) => {
@@ -495,7 +470,7 @@ fn run_automation_loop(
             },
         );
     }
-    set_last_outcome(outcome);
+    progress_update(move |p| p.last_outcome = Some(outcome));
 
     // Drop the sender to signal OCR worker to finish
     drop(ctx.work_sender);

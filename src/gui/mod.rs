@@ -17,7 +17,7 @@ use tray_icon::{
 };
 
 use crate::automation::runner::{
-    extend_automation, get_last_outcome, is_automation_running, resume_automation, start_automation,
+    extend_automation, get_progress, is_automation_running, resume_automation, start_automation,
     AutomationOutcome,
 };
 use crate::automation::results_edit::{
@@ -313,15 +313,18 @@ impl GuiApp {
 
         match &self.state.status {
             AutomationStatus::Running { total, start_time, .. } => {
+                // One snapshot so path/outcome/iteration all describe the same moment.
+                let progress = get_progress();
                 if !is_running {
                     // Automation finished - resolve the real outcome (success vs
                     // timeout/error vs abort) reported by the runner.
-                    let session_path = crate::automation::runner::get_current_session_path()
+                    let session_path = progress
+                        .session_path
                         .unwrap_or_else(|| crate::paths::get_output_dir());
                     self.state.latest_session_path = Some(session_path.clone());
 
                     self.state.status =
-                        self.finalize_status(get_last_outcome(), *total, session_path.clone());
+                        self.finalize_status(progress.last_outcome, *total, session_path.clone());
                     // Cache how many rows still need a human look so the finished
                     // panel can prompt the user (charts/CSV are final by now).
                     self.state.attention_counts =
@@ -331,12 +334,10 @@ impl GuiApp {
                     self.scan_resumable_sessions();
                 } else {
                     // Still running - update progress
-                    let current = crate::automation::runner::get_current_iteration();
-                    let state_desc = crate::automation::runner::get_current_state_description();
                     self.state.status = AutomationStatus::Running {
-                        current,
+                        current: progress.current_iteration,
                         total: *total,
-                        state_description: state_desc,
+                        state_description: progress.state_desc,
                         start_time: *start_time,
                     };
                 }
@@ -426,7 +427,7 @@ impl GuiApp {
         match start_automation(Some(iterations)) {
             Ok(()) => {
                 // Get session path from runner
-                self.state.latest_session_path = crate::automation::runner::get_current_session_path();
+                self.state.latest_session_path = get_progress().session_path;
 
                 self.state.status = AutomationStatus::Running {
                     current: 0,
@@ -460,8 +461,7 @@ impl GuiApp {
         if let Some((completed, total, session_path)) = self.state.status.resumable() {
             match resume_automation(session_path.clone(), completed, total) {
                 Ok(()) => {
-                    self.state.latest_session_path =
-                        crate::automation::runner::get_current_session_path();
+                    self.state.latest_session_path = get_progress().session_path;
                     self.state.status = AutomationStatus::Running {
                         current: completed,
                         total,
@@ -497,12 +497,12 @@ impl GuiApp {
         };
         match extend_automation(session_path.clone(), additional) {
             Ok(()) => {
-                self.state.latest_session_path =
-                    crate::automation::runner::get_current_session_path();
-                // start_automation_inner has already seeded these atomics:
-                // TOTAL_ITERATIONS = completed + additional, CURRENT_ITERATION = completed.
-                let total = crate::automation::runner::get_total_iterations();
-                let current = crate::automation::runner::get_current_iteration();
+                // start_automation_inner has already seeded the progress state:
+                // total = completed + additional, current = completed.
+                let progress = get_progress();
+                self.state.latest_session_path = progress.session_path;
+                let total = progress.total_iterations;
+                let current = progress.current_iteration;
                 self.state.status = AutomationStatus::Running {
                     current,
                     total,
@@ -549,8 +549,7 @@ impl GuiApp {
         if let Some(s) = chosen {
             match resume_automation(s.path.clone(), s.completed, s.total) {
                 Ok(()) => {
-                    self.state.latest_session_path =
-                        crate::automation::runner::get_current_session_path();
+                    self.state.latest_session_path = get_progress().session_path;
                     self.state.status = AutomationStatus::Running {
                         current: s.completed,
                         total: s.total,
