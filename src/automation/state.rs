@@ -2,9 +2,17 @@
 //!
 //! The state machine sequences through: Start → Wait → Skip → Capture → Loop
 //! Each state transition checks for abort signals and window validity.
+//!
+//! The sequencing logic (`AutomationContext::step`) is pure: everything it asks
+//! of the outside world goes through the [`GameOps`] trait. The production
+//! implementation ([`LiveGame`]) talks to the real game window via Windows
+//! APIs; unit tests drive the same `step()` with a scripted fake, so the
+//! transition rules are testable without a game window
+//! (`GAKUMAS_NO_MANIFEST=1 cargo test`).
 
 use anyhow::{anyhow, Result};
 use chrono::Local;
+use image::{ImageBuffer, Rgba};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -93,14 +101,173 @@ impl AutomationState {
     }
 }
 
+/// Everything the state machine asks of the outside world.
+///
+/// The production implementation ([`LiveGame`]) drives the real game window
+/// (SendInput clicks, WGC captures, brightness/histogram waits); tests use a
+/// scripted fake. Wait methods block until the screen condition holds,
+/// returning `Err` on timeout or abort — when a wait fails because the user
+/// aborted, `abort_requested()` returns true, which is how the state machine
+/// distinguishes `Aborted` from `Error`.
+pub trait GameOps {
+    /// Is the game window still alive?
+    fn is_window_valid(&self) -> bool;
+    /// Focus the game window and click the Start button.
+    fn click_start(&mut self) -> Result<()>;
+    /// Focus the game window and click the Skip button.
+    fn click_skip(&mut self) -> Result<()>;
+    /// Focus the game window and click the End button.
+    fn click_end(&mut self) -> Result<()>;
+    /// Block until the rehearsal start page is showing. When `retry_end_click`
+    /// is true (iterations after this run's first), the wait may re-click the
+    /// End button if the page hasn't changed yet.
+    fn wait_for_start_page(&mut self, retry_end_click: bool) -> Result<()>;
+    /// Block until loading finished (Skip button present and enabled). May
+    /// re-click the Start button while waiting.
+    fn wait_for_loading(&mut self) -> Result<()>;
+    /// Block until the result screen is showing (End button present). May
+    /// re-click the Skip button while waiting.
+    fn wait_for_result(&mut self) -> Result<()>;
+    /// Capture the result screen as an RGBA image.
+    fn capture_result(&mut self) -> Result<ImageBuffer<Rgba<u8>, Vec<u8>>>;
+    /// Has the user requested an abort?
+    fn abort_requested(&self) -> bool;
+}
+
+/// Production [`GameOps`]: drives the live game window via Windows APIs.
+///
+/// Owns the window handle, the automation config (button coordinates, regions,
+/// thresholds), and the pre-loaded button reference images used for post-click
+/// verification during the waits.
+pub struct LiveGame {
+    hwnd: HWND,
+    config: AutomationConfig,
+    /// Pre-loaded Start button reference for post-click verification
+    start_button_ref: Option<ReferenceImage>,
+    /// Pre-loaded Skip button reference for post-click verification
+    skip_button_ref: Option<ReferenceImage>,
+    /// Pre-loaded End button reference for post-click verification
+    end_button_ref: Option<ReferenceImage>,
+}
+
+impl LiveGame {
+    /// Creates the production game driver, pre-loading button reference images.
+    pub fn new(hwnd: HWND, config: AutomationConfig) -> Self {
+        let exe_dir = crate::paths::get_exe_dir();
+
+        let start_button_ref = load_ref_image(&exe_dir, &config.start_button_reference, "Start");
+        let skip_button_ref = load_ref_image(&exe_dir, &config.skip_button_reference, "Skip");
+        let end_button_ref = load_ref_image(&exe_dir, &config.end_button_reference, "End");
+
+        Self {
+            hwnd,
+            config,
+            start_button_ref,
+            skip_button_ref,
+            end_button_ref,
+        }
+    }
+
+    /// Clicks at a relative position after re-focusing the window.
+    ///
+    /// Re-focusing is important because the user might click elsewhere during
+    /// automation.
+    fn click_with_focus(&self, rel_x: f32, rel_y: f32) -> Result<()> {
+        if !self.is_window_valid() {
+            return Err(anyhow!("Game window no longer exists"));
+        }
+
+        // Bring window to foreground
+        unsafe {
+            let _ = SetForegroundWindow(self.hwnd);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+
+        click_at_relative(self.hwnd, rel_x, rel_y)
+    }
+}
+
+/// The abort check injected into the detection waits (and read directly by
+/// `LiveGame::abort_requested`).
+fn abort_flag() -> bool {
+    ABORT_REQUESTED.load(Ordering::SeqCst)
+}
+
+impl GameOps for LiveGame {
+    fn is_window_valid(&self) -> bool {
+        unsafe { IsWindow(self.hwnd).as_bool() }
+    }
+
+    fn click_start(&mut self) -> Result<()> {
+        self.click_with_focus(self.config.start_button.x, self.config.start_button.y)
+    }
+
+    fn click_skip(&mut self) -> Result<()> {
+        self.click_with_focus(self.config.skip_button.x, self.config.skip_button.y)
+    }
+
+    fn click_end(&mut self) -> Result<()> {
+        self.click_with_focus(self.config.end_button.x, self.config.end_button.y)
+    }
+
+    fn wait_for_start_page(&mut self, retry_end_click: bool) -> Result<()> {
+        let click_retry = if retry_end_click {
+            self.end_button_ref.as_ref().map(|ref_img| ClickRetryInfo {
+                hwnd: self.hwnd,
+                button_x: self.config.end_button.x,
+                button_y: self.config.end_button.y,
+                button_region: &self.config.end_button_region,
+                ref_img,
+                histogram_threshold: self.config.histogram_threshold,
+                max_retries: self.config.max_click_retries,
+            })
+        } else {
+            None
+        };
+        wait_for_start_page(self.hwnd, &self.config, click_retry, &abort_flag)
+    }
+
+    fn wait_for_loading(&mut self) -> Result<()> {
+        let click_retry = self.start_button_ref.as_ref().map(|ref_img| ClickRetryInfo {
+            hwnd: self.hwnd,
+            button_x: self.config.start_button.x,
+            button_y: self.config.start_button.y,
+            button_region: &self.config.start_button_region,
+            ref_img,
+            histogram_threshold: self.config.histogram_threshold,
+            max_retries: self.config.max_click_retries,
+        });
+        wait_for_loading(self.hwnd, &self.config, click_retry, &abort_flag)
+    }
+
+    fn wait_for_result(&mut self) -> Result<()> {
+        let click_retry = self.skip_button_ref.as_ref().map(|ref_img| ClickRetryInfo {
+            hwnd: self.hwnd,
+            button_x: self.config.skip_button.x,
+            button_y: self.config.skip_button.y,
+            button_region: &self.config.skip_button_region,
+            ref_img,
+            histogram_threshold: self.config.histogram_threshold,
+            max_retries: self.config.max_click_retries,
+        });
+        wait_for_result(self.hwnd, &self.config, click_retry, &abort_flag)
+    }
+
+    fn capture_result(&mut self) -> Result<ImageBuffer<Rgba<u8>, Vec<u8>>> {
+        capture_gakumas_to_buffer(self.hwnd)
+    }
+
+    fn abort_requested(&self) -> bool {
+        abort_flag()
+    }
+}
+
 /// Automation context holding state and configuration.
-pub struct AutomationContext {
+pub struct AutomationContext<G: GameOps> {
     /// Current state
     pub state: AutomationState,
-    /// Game window handle
-    pub hwnd: HWND,
-    /// Automation configuration
-    pub config: AutomationConfig,
+    /// Interface to the game window (production: [`LiveGame`]; tests: a fake)
+    ops: G,
     /// Current iteration number (1-based)
     pub current_iteration: u32,
     /// Number of iterations whose result was successfully captured (0-based count)
@@ -115,36 +282,20 @@ pub struct AutomationContext {
     pub start_time: Instant,
     /// Directory for saving screenshots
     pub screenshot_dir: PathBuf,
-    /// Pre-loaded Start button reference for post-click verification
-    start_button_ref: Option<ReferenceImage>,
-    /// Pre-loaded Skip button reference for post-click verification
-    skip_button_ref: Option<ReferenceImage>,
-    /// Pre-loaded End button reference for post-click verification
-    end_button_ref: Option<ReferenceImage>,
 }
 
-impl AutomationContext {
-    /// Creates a new automation context.
-    ///
-    /// Pre-loads button reference images for post-click verification.
+impl<G: GameOps> AutomationContext<G> {
+    /// Creates a new automation context around a game driver.
     pub fn new(
-        hwnd: HWND,
-        config: AutomationConfig,
+        ops: G,
         max_iterations: u32,
         start_iteration: u32,
         work_sender: Sender<OcrWorkItem>,
         screenshot_dir: PathBuf,
     ) -> Self {
-        let exe_dir = crate::paths::get_exe_dir();
-
-        let start_button_ref = load_ref_image(&exe_dir, &config.start_button_reference, "Start");
-        let skip_button_ref = load_ref_image(&exe_dir, &config.skip_button_reference, "Skip");
-        let end_button_ref = load_ref_image(&exe_dir, &config.end_button_reference, "End");
-
         Self {
             state: AutomationState::Idle,
-            hwnd,
-            config,
+            ops,
             current_iteration: 0,
             completed_iterations: start_iteration.saturating_sub(1),
             start_iteration,
@@ -152,9 +303,6 @@ impl AutomationContext {
             work_sender,
             start_time: Instant::now(),
             screenshot_dir,
-            start_button_ref,
-            skip_button_ref,
-            end_button_ref,
         }
     }
 
@@ -163,14 +311,14 @@ impl AutomationContext {
     /// Returns `Ok(true)` if automation should continue, `Ok(false)` if complete/error/aborted.
     pub fn step(&mut self) -> Result<bool> {
         // Check for abort before each state transition
-        if ABORT_REQUESTED.load(Ordering::SeqCst) {
+        if self.ops.abort_requested() {
             crate::log("Abort requested, stopping automation");
             self.state = AutomationState::Aborted;
             return Ok(false);
         }
 
         // Check if window is still valid
-        if !is_window_valid(self.hwnd) {
+        if !self.ops.is_window_valid() {
             crate::log("Game window no longer exists, aborting");
             self.state = AutomationState::Error("Game window closed".to_string());
             return Ok(false);
@@ -195,28 +343,16 @@ impl AutomationContext {
 
                 // Only retry End button click after the first iteration of this run
                 // (the first iteration — fresh or resumed — hasn't clicked End yet)
-                let click_retry = if self.current_iteration > self.start_iteration {
-                    self.end_button_ref.as_ref().map(|ref_img| ClickRetryInfo {
-                        hwnd: self.hwnd,
-                        button_x: self.config.end_button.x,
-                        button_y: self.config.end_button.y,
-                        button_region: &self.config.end_button_region,
-                        ref_img,
-                        histogram_threshold: self.config.histogram_threshold,
-                        max_retries: self.config.max_click_retries,
-                    })
-                } else {
-                    None
-                };
+                let retry_end_click = self.current_iteration > self.start_iteration;
 
-                match wait_for_start_page(self.hwnd, &self.config, click_retry) {
+                match self.ops.wait_for_start_page(retry_end_click) {
                     Ok(()) => {
                         self.state = AutomationState::ClickingStart;
                         Ok(true)
                     }
                     Err(e) => {
                         // Check if this was an abort request
-                        if ABORT_REQUESTED.load(Ordering::SeqCst) {
+                        if self.ops.abort_requested() {
                             crate::log("Abort requested during start page wait");
                             self.state = AutomationState::Aborted;
                         } else {
@@ -234,11 +370,7 @@ impl AutomationContext {
                     self.current_iteration, self.max_iterations
                 ));
 
-                if let Err(e) = click_with_focus(
-                    self.hwnd,
-                    self.config.start_button.x,
-                    self.config.start_button.y,
-                ) {
+                if let Err(e) = self.ops.click_start() {
                     self.state = AutomationState::Error(format!("Failed to click Start: {}", e));
                     return Ok(false);
                 }
@@ -253,24 +385,14 @@ impl AutomationContext {
                     self.current_iteration, self.max_iterations
                 ));
 
-                let click_retry = self.start_button_ref.as_ref().map(|ref_img| ClickRetryInfo {
-                    hwnd: self.hwnd,
-                    button_x: self.config.start_button.x,
-                    button_y: self.config.start_button.y,
-                    button_region: &self.config.start_button_region,
-                    ref_img,
-                    histogram_threshold: self.config.histogram_threshold,
-                    max_retries: self.config.max_click_retries,
-                });
-
-                match wait_for_loading(self.hwnd, &self.config, click_retry) {
+                match self.ops.wait_for_loading() {
                     Ok(()) => {
                         self.state = AutomationState::ClickingSkip;
                         Ok(true)
                     }
                     Err(e) => {
                         // Check if this was an abort request
-                        if ABORT_REQUESTED.load(Ordering::SeqCst) {
+                        if self.ops.abort_requested() {
                             crate::log("Abort requested during loading wait");
                             self.state = AutomationState::Aborted;
                         } else {
@@ -288,11 +410,7 @@ impl AutomationContext {
                     self.current_iteration, self.max_iterations
                 ));
 
-                if let Err(e) = click_with_focus(
-                    self.hwnd,
-                    self.config.skip_button.x,
-                    self.config.skip_button.y,
-                ) {
+                if let Err(e) = self.ops.click_skip() {
                     self.state = AutomationState::Error(format!("Failed to click Skip: {}", e));
                     return Ok(false);
                 }
@@ -307,24 +425,14 @@ impl AutomationContext {
                     self.current_iteration, self.max_iterations
                 ));
 
-                let click_retry = self.skip_button_ref.as_ref().map(|ref_img| ClickRetryInfo {
-                    hwnd: self.hwnd,
-                    button_x: self.config.skip_button.x,
-                    button_y: self.config.skip_button.y,
-                    button_region: &self.config.skip_button_region,
-                    ref_img,
-                    histogram_threshold: self.config.histogram_threshold,
-                    max_retries: self.config.max_click_retries,
-                });
-
-                match wait_for_result(self.hwnd, &self.config, click_retry) {
+                match self.ops.wait_for_result() {
                     Ok(()) => {
                         self.state = AutomationState::Capturing;
                         Ok(true)
                     }
                     Err(e) => {
                         // Check if this was an abort request
-                        if ABORT_REQUESTED.load(Ordering::SeqCst) {
+                        if self.ops.abort_requested() {
                             crate::log("Abort requested during result wait");
                             self.state = AutomationState::Aborted;
                         } else {
@@ -343,7 +451,7 @@ impl AutomationContext {
                 ));
 
                 // Capture screenshot
-                let img = match capture_gakumas_to_buffer(self.hwnd) {
+                let img = match self.ops.capture_result() {
                     Ok(img) => img,
                     Err(e) => {
                         self.state =
@@ -391,11 +499,7 @@ impl AutomationContext {
                     self.current_iteration, self.max_iterations
                 ));
 
-                if let Err(e) = click_with_focus(
-                    self.hwnd,
-                    self.config.end_button.x,
-                    self.config.end_button.y,
-                ) {
+                if let Err(e) = self.ops.click_end() {
                     self.state = AutomationState::Error(format!("Failed to click End: {}", e));
                     return Ok(false);
                 }
@@ -469,28 +573,6 @@ fn load_ref_image(
     }
 }
 
-/// Checks if a window handle is still valid.
-fn is_window_valid(hwnd: HWND) -> bool {
-    unsafe { IsWindow(hwnd).as_bool() }
-}
-
-/// Clicks at a relative position after re-focusing the window.
-///
-/// Re-focusing is important because the user might click elsewhere during automation.
-fn click_with_focus(hwnd: HWND, rel_x: f32, rel_y: f32) -> Result<()> {
-    if !is_window_valid(hwnd) {
-        return Err(anyhow!("Game window no longer exists"));
-    }
-
-    // Bring window to foreground
-    unsafe {
-        let _ = SetForegroundWindow(hwnd);
-    }
-    std::thread::sleep(Duration::from_millis(50));
-
-    click_at_relative(hwnd, rel_x, rel_y)
-}
-
 /// Resets the abort flag. Call before starting automation.
 pub fn reset_abort_flag() {
     ABORT_REQUESTED.store(false, Ordering::SeqCst);
@@ -504,6 +586,8 @@ pub fn request_abort() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::automation::queue::create_work_queue;
+    use std::collections::VecDeque;
 
     #[test]
     fn test_state_display() {
@@ -515,6 +599,201 @@ mod tests {
         assert_eq!(
             format!("{}", AutomationState::Error("test".to_string())),
             "Error: test"
+        );
+    }
+
+    /// Scripted outcome for one mock wait call. `AbortFail` models the user
+    /// pressing the abort hotkey during the wait: the global flag flips and the
+    /// wait returns Err, exactly like the real detection functions.
+    #[derive(Clone, Copy)]
+    enum WaitScript {
+        Ok,
+        Fail,
+        AbortFail,
+    }
+
+    /// Scripted [`GameOps`] fake. Records every call (with the argument that
+    /// matters) so tests can assert on the exact operation sequence. Wait
+    /// queues default to `Ok` when empty.
+    struct MockGame {
+        window_valid: bool,
+        abort: bool,
+        calls: Vec<String>,
+        wait_start_page: VecDeque<WaitScript>,
+        wait_loading: VecDeque<WaitScript>,
+        wait_result: VecDeque<WaitScript>,
+    }
+
+    impl MockGame {
+        fn new() -> Self {
+            Self {
+                window_valid: true,
+                abort: false,
+                calls: Vec::new(),
+                wait_start_page: VecDeque::new(),
+                wait_loading: VecDeque::new(),
+                wait_result: VecDeque::new(),
+            }
+        }
+
+        fn apply(&mut self, script: WaitScript) -> Result<()> {
+            match script {
+                WaitScript::Ok => Ok(()),
+                WaitScript::Fail => Err(anyhow!("scripted wait failure")),
+                WaitScript::AbortFail => {
+                    self.abort = true;
+                    Err(anyhow!("Abort requested"))
+                }
+            }
+        }
+    }
+
+    impl GameOps for MockGame {
+        fn is_window_valid(&self) -> bool {
+            self.window_valid
+        }
+        fn click_start(&mut self) -> Result<()> {
+            self.calls.push("click_start".into());
+            Ok(())
+        }
+        fn click_skip(&mut self) -> Result<()> {
+            self.calls.push("click_skip".into());
+            Ok(())
+        }
+        fn click_end(&mut self) -> Result<()> {
+            self.calls.push("click_end".into());
+            Ok(())
+        }
+        fn wait_for_start_page(&mut self, retry_end_click: bool) -> Result<()> {
+            self.calls.push(format!("wait_start_page({})", retry_end_click));
+            let s = self.wait_start_page.pop_front().unwrap_or(WaitScript::Ok);
+            self.apply(s)
+        }
+        fn wait_for_loading(&mut self) -> Result<()> {
+            self.calls.push("wait_loading".into());
+            let s = self.wait_loading.pop_front().unwrap_or(WaitScript::Ok);
+            self.apply(s)
+        }
+        fn wait_for_result(&mut self) -> Result<()> {
+            self.calls.push("wait_result".into());
+            let s = self.wait_result.pop_front().unwrap_or(WaitScript::Ok);
+            self.apply(s)
+        }
+        fn capture_result(&mut self) -> Result<ImageBuffer<Rgba<u8>, Vec<u8>>> {
+            self.calls.push("capture".into());
+            Ok(ImageBuffer::new(1, 1))
+        }
+        fn abort_requested(&self) -> bool {
+            self.abort
+        }
+    }
+
+    /// Drives the state machine to a terminal state and returns the context.
+    fn run_to_end(
+        mock: MockGame,
+        max_iterations: u32,
+        start_iteration: u32,
+    ) -> AutomationContext<MockGame> {
+        let (sender, _receiver) = create_work_queue();
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = AutomationContext::new(
+            mock,
+            max_iterations,
+            start_iteration,
+            sender,
+            dir.path().to_path_buf(),
+        );
+        // The dir must outlive the loop (screenshots are saved into it).
+        while ctx.step().unwrap() {}
+        // Keep tempdir alive until after the loop; it drops here.
+        ctx
+    }
+
+    #[test]
+    fn happy_path_runs_two_iterations_in_order() {
+        let ctx = run_to_end(MockGame::new(), 2, 1);
+        assert_eq!(ctx.state, AutomationState::Complete);
+        assert_eq!(ctx.completed_iterations, 2);
+        assert_eq!(
+            ctx.ops.calls,
+            vec![
+                // Iteration 1: first iteration of the run never retries End.
+                "wait_start_page(false)",
+                "click_start",
+                "wait_loading",
+                "click_skip",
+                "wait_result",
+                "capture",
+                "click_end",
+                // Iteration 2: now past the run's first iteration -> retry allowed.
+                "wait_start_page(true)",
+                "click_start",
+                "wait_loading",
+                "click_skip",
+                "wait_result",
+                "capture",
+                "click_end",
+            ]
+        );
+    }
+
+    #[test]
+    fn resume_starts_at_start_iteration_and_counts_from_completed() {
+        // Resuming 3..=4 of a 4-iteration series: completed starts at 2.
+        let ctx = run_to_end(MockGame::new(), 4, 3);
+        assert_eq!(ctx.state, AutomationState::Complete);
+        assert_eq!(ctx.completed_iterations, 4);
+        // Iteration 3 is this run's first (3 > 3 is false) -> no End retry;
+        // iteration 4 retries.
+        let waits: Vec<&str> = ctx
+            .ops
+            .calls
+            .iter()
+            .filter(|c| c.starts_with("wait_start_page"))
+            .map(|s| s.as_str())
+            .collect();
+        assert_eq!(waits, vec!["wait_start_page(false)", "wait_start_page(true)"]);
+    }
+
+    #[test]
+    fn abort_during_wait_ends_aborted_not_error() {
+        let mut mock = MockGame::new();
+        mock.wait_loading.push_back(WaitScript::AbortFail);
+        let ctx = run_to_end(mock, 2, 1);
+        assert_eq!(ctx.state, AutomationState::Aborted);
+        assert_eq!(ctx.completed_iterations, 0);
+    }
+
+    #[test]
+    fn wait_failure_without_abort_ends_error() {
+        let mut mock = MockGame::new();
+        mock.wait_loading.push_back(WaitScript::Fail);
+        let ctx = run_to_end(mock, 2, 1);
+        match &ctx.state {
+            AutomationState::Error(msg) => {
+                assert!(msg.contains("Loading wait failed"), "unexpected: {msg}")
+            }
+            other => panic!("expected Error, got {other}"),
+        }
+    }
+
+    #[test]
+    fn abort_before_step_ends_aborted_immediately() {
+        let mut mock = MockGame::new();
+        mock.abort = true;
+        let ctx = run_to_end(mock, 2, 1);
+        assert_eq!(ctx.state, AutomationState::Aborted);
+        assert!(ctx.ops.calls.is_empty());
+    }
+
+    #[test]
+    fn invalid_window_ends_error() {
+        let mut mock = MockGame::new();
+        mock.window_valid = false;
+        let ctx = run_to_end(mock, 2, 1);
+        assert_eq!(
+            ctx.state,
+            AutomationState::Error("Game window closed".to_string())
         );
     }
 }
