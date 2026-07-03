@@ -27,9 +27,21 @@ pub struct OcrWord {
     pub confidence: f32,
 }
 
-/// Runs Tesseract on a preprocessed grayscale image.
-/// Returns structured output with lines and confidence scores.
-pub fn recognize_image(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> Result<Vec<OcrLine>> {
+/// Saves `img` to a temp PNG, runs the embedded tesseract.exe with TSV output,
+/// and returns the parsed lines.
+///
+/// This is the single invocation path shared by all TSV-mode recognizers:
+/// temp-file creation, command assembly (with `CREATE_NO_WINDOW` on Windows),
+/// stderr logging, exit-status checking, TSV read + cleanup, and parsing all
+/// live here. `whitelist` adds `-c tessedit_char_whitelist=...` when `Some`.
+/// `tag` keeps concurrent callers' temp-file names distinct (`tesseract_out` /
+/// `tesseract_line` / `tesseract_num`), preserving the historical on-disk names.
+fn run_tesseract_tsv(
+    img: &ImageBuffer<Luma<u8>, Vec<u8>>,
+    tag: &str,
+    psm: &str,
+    whitelist: Option<&str>,
+) -> Result<Vec<OcrLine>> {
     let tesseract_exe = find_tesseract_executable()?;
     let tessdata_dir = find_tessdata_dir()?;
 
@@ -41,7 +53,7 @@ pub fn recognize_image(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> Result<Vec<OcrLi
     // Tesseract will append .tsv to this path
     let temp_dir = std::env::temp_dir();
     let output_base = temp_dir
-        .join(format!("tesseract_out_{}", std::process::id()))
+        .join(format!("{}_{}", tag, std::process::id()))
         .to_string_lossy()
         .to_string();
 
@@ -55,9 +67,11 @@ pub fn recognize_image(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> Result<Vec<OcrLi
         .arg("-l")
         .arg("eng")
         .arg("--psm")
-        .arg("6") // Assume single uniform block of text
-        .arg("-c")
-        .arg("tessedit_create_tsv=1");
+        .arg(psm);
+    if let Some(wl) = whitelist {
+        cmd.arg("-c").arg(format!("tessedit_char_whitelist={}", wl));
+    }
+    cmd.arg("-c").arg("tessedit_create_tsv=1");
 
     // Prevent console window from appearing on Windows
     #[cfg(windows)]
@@ -93,6 +107,13 @@ pub fn recognize_image(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> Result<Vec<OcrLi
 
     // Parse TSV output
     parse_tsv_output(&tsv_content)
+}
+
+/// Runs Tesseract on a preprocessed grayscale image.
+/// Returns structured output with lines and confidence scores.
+pub fn recognize_image(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> Result<Vec<OcrLine>> {
+    // psm 6: assume a single uniform block of text.
+    run_tesseract_tsv(img, "tesseract_out", "6", None)
 }
 
 /// Parses Tesseract TSV output into structured OcrLine data
@@ -193,57 +214,8 @@ fn parse_tsv_output(tsv: &str) -> Result<Vec<OcrLine>> {
 /// numbers are present in the cropped region. No character whitelist is used;
 /// the crop itself limits noise, and downstream regex filtering handles the rest.
 pub fn recognize_image_line(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> Result<Vec<OcrLine>> {
-    let tesseract_exe = find_tesseract_executable()?;
-    let tessdata_dir = find_tessdata_dir()?;
-
-    // Save image to temporary file
-    let temp_input = NamedTempFile::with_suffix(".png")?;
-    img.save(temp_input.path())?;
-
-    let temp_dir = std::env::temp_dir();
-    let output_base = temp_dir
-        .join(format!("tesseract_line_{}", std::process::id()))
-        .to_string_lossy()
-        .to_string();
-
-    let mut cmd = Command::new(&tesseract_exe);
-    cmd.arg(temp_input.path())
-        .arg(&output_base)
-        .arg("--tessdata-dir")
-        .arg(&tessdata_dir)
-        .arg("-l")
-        .arg("eng")
-        .arg("--psm")
-        .arg("6") // Block of text — better word segmentation for multiple numbers
-        .arg("-c")
-        .arg("tessedit_create_tsv=1");
-
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-
-    let output = cmd.output()?;
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !stderr.is_empty() {
-        crate::log(&format!("Tesseract stderr: {}", stderr.trim()));
-    }
-
-    if !output.status.success() {
-        return Err(anyhow!("Tesseract failed with exit code {:?}: {}", output.status.code(), stderr));
-    }
-
-    let tsv_path = format!("{}.tsv", output_base);
-    let tsv_content = match std::fs::read_to_string(&tsv_path) {
-        Ok(content) => content,
-        Err(e) => {
-            crate::log(&format!("Expected TSV path: {}", tsv_path));
-            return Err(anyhow!("Failed to read Tesseract output at {}: {}", tsv_path, e));
-        }
-    };
-
-    let _ = std::fs::remove_file(&tsv_path);
-
-    parse_tsv_output(&tsv_content)
+    // psm 6: block of text — better word segmentation for multiple numbers.
+    run_tesseract_tsv(img, "tesseract_line", "6", None)
 }
 
 /// OCRs a pre-binarized crop as a single isolated integer.
@@ -270,58 +242,8 @@ pub fn recognize_single_number(
     whitelist: &str,
     anchor_plus: bool,
 ) -> Result<Option<u32>> {
-    let tesseract_exe = find_tesseract_executable()?;
-    let tessdata_dir = find_tessdata_dir()?;
-
-    let temp_input = NamedTempFile::with_suffix(".png")?;
-    img.save(temp_input.path())?;
-
-    let temp_dir = std::env::temp_dir();
-    let output_base = temp_dir
-        .join(format!("tesseract_num_{}", std::process::id()))
-        .to_string_lossy()
-        .to_string();
-
-    let mut cmd = Command::new(&tesseract_exe);
-    cmd.arg(temp_input.path())
-        .arg(&output_base)
-        .arg("--tessdata-dir")
-        .arg(&tessdata_dir)
-        .arg("-l")
-        .arg("eng")
-        .arg("--psm")
-        .arg("7") // Single text line
-        .arg("-c")
-        .arg(format!("tessedit_char_whitelist={}", whitelist))
-        .arg("-c")
-        .arg("tessedit_create_tsv=1");
-
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-
-    let output = cmd.output()?;
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !stderr.is_empty() {
-        crate::log(&format!("Tesseract stderr: {}", stderr.trim()));
-    }
-
-    if !output.status.success() {
-        return Err(anyhow!("Tesseract failed with exit code {:?}: {}", output.status.code(), stderr));
-    }
-
-    let tsv_path = format!("{}.tsv", output_base);
-    let tsv_content = match std::fs::read_to_string(&tsv_path) {
-        Ok(content) => content,
-        Err(e) => {
-            crate::log(&format!("Expected TSV path: {}", tsv_path));
-            return Err(anyhow!("Failed to read Tesseract output at {}: {}", tsv_path, e));
-        }
-    };
-
-    let _ = std::fs::remove_file(&tsv_path);
-
-    let lines = parse_tsv_output(&tsv_content)?;
+    // psm 7: single text line — the total/bonus crops hold one isolated number.
+    let lines = run_tesseract_tsv(img, "tesseract_num", "7", Some(whitelist))?;
     let raw: String = lines
         .iter()
         .map(|l| l.text.as_str())
