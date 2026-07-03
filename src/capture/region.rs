@@ -1,29 +1,19 @@
 //! Region capture functionality for extracting sub-areas of the game window.
 //!
 //! This module provides the ability to capture arbitrary rectangular regions
-//! of the game window, which is used for brightness detection and OCR.
+//! of the game window, which is used for brightness detection and OCR. The
+//! actual D3D11 capture work is shared with full-window screenshots via
+//! `super::screenshot::capture_and_crop`; this module only owns the
+//! relative→absolute coordinate math.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
 use image::{ImageBuffer, Rgba};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
-use windows::core::Interface;
-use windows::Foundation::TypedEventHandler;
-use windows::Graphics::Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem};
-use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
-use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Resource, ID3D11Texture2D,
-    D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ, D3D11_SDK_VERSION,
-    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
-};
-use windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice;
-use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 
 use crate::automation::RelativeRect;
 
+use super::screenshot::{capture_and_crop, CropBox};
 use super::window::get_client_area_info;
 
 /// Captures a rectangular region of the game window.
@@ -49,199 +39,15 @@ pub fn capture_region(hwnd: HWND, rel_rect: &RelativeRect) -> Result<ImageBuffer
     let region_width = region_width.min(client_width - region_x).max(1);
     let region_height = region_height.min(client_height - region_y).max(1);
 
-    // Create D3D11 device
-    let (device, context) = create_d3d11_device()?;
-
-    // Create capture item from window
-    let item = create_capture_item(hwnd)?;
-    let size = item.Size()?;
-
-    // Create frame pool
-    let d3d_device = create_direct3d_device(&device)?;
-    let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
-        &d3d_device,
-        DirectXPixelFormat::B8G8R8A8UIntNormalized,
-        1,
-        size,
-    )?;
-
-    // Create capture session
-    let session = frame_pool.CreateCaptureSession(&item)?;
-
-    // Disable cursor capture to exclude cursor from screenshots
-    session.SetIsCursorCaptureEnabled(false)?;
-
-    // Set up frame arrival handling
-    let frame_arrived = Arc::new(AtomicBool::new(false));
-    let frame_arrived_clone = frame_arrived.clone();
-
-    frame_pool.FrameArrived(&TypedEventHandler::new(
-        move |_pool: &Option<Direct3D11CaptureFramePool>, _| {
-            frame_arrived_clone.store(true, Ordering::SeqCst);
-            Ok(())
+    // Absolute crop position within the captured frame (client offset + region offset)
+    capture_and_crop(
+        hwnd,
+        CropBox {
+            x: client_offset.x as u32 + region_x,
+            y: client_offset.y as u32 + region_y,
+            width: region_width,
+            height: region_height,
         },
-    ))?;
-
-    // Start capture
-    session.StartCapture()?;
-
-    // Wait for frame
-    let start = std::time::Instant::now();
-    while !frame_arrived.load(Ordering::SeqCst) {
-        if start.elapsed().as_secs() > 5 {
-            return Err(anyhow!("Timeout waiting for frame"));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-
-    // Get the frame
-    let frame = frame_pool.TryGetNextFrame()?;
-    let surface = frame.Surface()?;
-
-    // Get the D3D11 texture from the surface
-    let access: windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess =
-        surface.cast()?;
-    let texture: ID3D11Texture2D = unsafe { access.GetInterface()? };
-
-    // Get texture description
-    let mut desc = D3D11_TEXTURE2D_DESC::default();
-    unsafe { texture.GetDesc(&mut desc) };
-
-    // Create staging texture for CPU read
-    let staging_desc = D3D11_TEXTURE2D_DESC {
-        Width: desc.Width,
-        Height: desc.Height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: desc.Format,
-        SampleDesc: desc.SampleDesc,
-        Usage: D3D11_USAGE_STAGING,
-        BindFlags: Default::default(),
-        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-        MiscFlags: Default::default(),
-    };
-
-    let staging_texture = unsafe {
-        let mut staging: Option<ID3D11Texture2D> = None;
-        device.CreateTexture2D(&staging_desc, None, Some(&mut staging))?;
-        staging.ok_or_else(|| anyhow!("Failed to create staging texture"))?
-    };
-
-    // Copy to staging texture
-    unsafe {
-        context.CopyResource(
-            &staging_texture.cast::<ID3D11Resource>()?,
-            &texture.cast::<ID3D11Resource>()?,
-        );
-    }
-
-    // Map the staging texture
-    let mapped = unsafe {
-        let mut mapped = Default::default();
-        context.Map(
-            &staging_texture.cast::<ID3D11Resource>()?,
-            0,
-            D3D11_MAP_READ,
-            0,
-            Some(&mut mapped),
-        )?;
-        mapped
-    };
-
-    // Calculate absolute crop position (client offset + region offset)
-    let crop_x = client_offset.x as u32 + region_x;
-    let crop_y = client_offset.y as u32 + region_y;
-
-    // Create image from mapped data (cropped to the specified region)
-    let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(region_width, region_height);
-
-    let src_data = unsafe {
-        std::slice::from_raw_parts(
-            mapped.pData as *const u8,
-            (mapped.RowPitch * desc.Height) as usize,
-        )
-    };
-    let row_pitch = mapped.RowPitch as usize;
-
-    for y in 0..region_height {
-        let src_y = (crop_y + y) as usize;
-        if src_y >= desc.Height as usize {
-            break;
-        }
-        for x in 0..region_width {
-            let src_x = (crop_x + x) as usize;
-            if src_x >= desc.Width as usize {
-                break;
-            }
-            let offset = src_y * row_pitch + src_x * 4;
-            // BGRA -> RGBA
-            let b = src_data[offset];
-            let g = src_data[offset + 1];
-            let r = src_data[offset + 2];
-            let a = src_data[offset + 3];
-            img.put_pixel(x, y, Rgba([r, g, b, a]));
-        }
-    }
-
-    // Unmap
-    unsafe {
-        context.Unmap(&staging_texture.cast::<ID3D11Resource>()?, 0);
-    }
-
-    // Stop capture
-    session.Close()?;
-    frame_pool.Close()?;
-
-    Ok(img)
-}
-
-/// Creates a Direct3D 11 device and immediate context.
-fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
-    let mut device: Option<ID3D11Device> = None;
-    let mut context: Option<ID3D11DeviceContext> = None;
-
-    unsafe {
-        D3D11CreateDevice(
-            None,
-            D3D_DRIVER_TYPE_HARDWARE,
-            None,
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            None,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )?;
-    }
-
-    Ok((
-        device.ok_or_else(|| anyhow!("Failed to create D3D11 device"))?,
-        context.ok_or_else(|| anyhow!("Failed to create D3D11 context"))?,
-    ))
-}
-
-/// Creates a WinRT Direct3D device wrapper from a D3D11 device.
-fn create_direct3d_device(
-    device: &ID3D11Device,
-) -> Result<windows::Graphics::DirectX::Direct3D11::IDirect3DDevice> {
-    let dxgi_device: windows::Win32::Graphics::Dxgi::IDXGIDevice = device.cast()?;
-    let inspectable = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device)? };
-    inspectable
-        .cast()
-        .context("Failed to cast to IDirect3DDevice")
-}
-
-/// Creates a GraphicsCaptureItem for the specified window.
-fn create_capture_item(hwnd: HWND) -> Result<GraphicsCaptureItem> {
-    let class_name = windows::core::h!("Windows.Graphics.Capture.GraphicsCaptureItem");
-    let interop: IGraphicsCaptureItemInterop = unsafe {
-        windows::Win32::System::WinRT::RoGetActivationFactory(class_name)
-            .context("Failed to get IGraphicsCaptureItemInterop")?
-    };
-
-    unsafe {
-        interop
-            .CreateForWindow(hwnd)
-            .context("Failed to create capture item for window")
-    }
+        false,
+    )
 }
