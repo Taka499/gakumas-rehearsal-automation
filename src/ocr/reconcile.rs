@@ -12,6 +12,12 @@
 //! (the bonus is `floor(max/5)`), so `reconcile_stage` reconstructs the true
 //! scores from the total alone via a small exhaustive search, using the bonus
 //! only as an optional cross-check.
+//!
+//! PARITY NOTE: `rehearsalRecovery.js` in the `gakumas-tools` fork (upstream
+//! PR surisuririsu/gakumas-tools#103) mirrors this file line-for-line and a
+//! 1200-row replay harness verifies the two produce identical output. Any
+//! behavioural change here must be ported there in the same change set;
+//! avoid structural refactoring that breaks the line-by-line correspondence.
 
 /// Confidence of a stage's reconstructed scores.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -38,6 +44,20 @@ pub enum Recovery {
 /// in-collision recovery of a score >= 3M would fall back to a flag. Raise this
 /// (and revisit the bonus/total guards) if scores ever exceed it.
 const MAX_SCORE: u32 = 3_000_000;
+
+/// Upper bound (inclusive) on the digit-stream length accepted by
+/// `reconstruct_from_digits`: three scores of at most 7 digits each is 21
+/// digits. Anything longer is garbage, not a recoverable collision — the
+/// duplicated-leading-digit case is handled per-part (see `MAX_PART_DIGITS`),
+/// not by lengthening the stream.
+const MAX_DIGIT_STREAM_LEN: usize = 21;
+
+/// Upper bound (inclusive) on one partition part's digit count. A part is
+/// normally at most 7 digits (score < `MAX_SCORE`), but a colliding leading
+/// "1" is sometimes *duplicated* by OCR rather than dropped, inflating one
+/// part to 8 digits; the candidate generator collapses that case back to 7 by
+/// dropping the doubled leading digit.
+const MAX_PART_DIGITS: usize = 8;
 
 /// How a candidate value was derived from the raw OCR value — its corruption
 /// provenance. Centralising this (rather than re-inferring "was a million
@@ -555,7 +575,7 @@ pub fn reconstruct_from_digits(
     }
     let ds: Vec<u8> = digits.bytes().filter(u8::is_ascii_digit).collect();
     let n = ds.len();
-    if n == 0 || n > 21 {
+    if n == 0 || n > MAX_DIGIT_STREAM_LEN {
         return None;
     }
     let bonus_ok = bonus.filter(|&b| b < 1_000_000 && b < total);
@@ -569,7 +589,7 @@ pub fn reconstruct_from_digits(
     // digits. Such a part is collapsed back to 7 by dropping the doubled leading
     // digit. See the digit-insertion case in the ExecPlan's field-run notes.
     for k in 1..=3usize.min(n) {
-        for comp in compositions(n, k, 1, 8) {
+        for comp in compositions(n, k, 1, MAX_PART_DIGITS) {
             // Slice the stream into k parts.
             let mut parts: [&[u8]; 3] = [&[], &[], &[]];
             let mut off = 0;
