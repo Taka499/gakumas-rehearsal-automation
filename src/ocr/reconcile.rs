@@ -13,11 +13,10 @@
 //! scores from the total alone via a small exhaustive search, using the bonus
 //! only as an optional cross-check.
 //!
-//! PARITY NOTE: `rehearsalRecovery.js` in the `gakumas-tools` fork (upstream
-//! PR surisuririsu/gakumas-tools#103) mirrors this file line-for-line and a
-//! 1200-row replay harness verifies the two produce identical output. Any
-//! behavioural change here must be ported there in the same change set;
-//! avoid structural refactoring that breaks the line-by-line correspondence.
+//! HISTORY NOTE: these heuristics were ported to the `gakumas-tools` fork as a
+//! one-time upstream contribution (surisuririsu/gakumas-tools#103); that port
+//! created no ongoing parity obligation in either direction, and this file may
+//! be freely refactored, subject to its unit tests (see docs/adr/0001).
 
 /// Confidence of a stage's reconstructed scores.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
