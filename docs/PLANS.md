@@ -63,6 +63,7 @@ Each milestone must be independently verifiable and incrementally implement the 
 * When you discover optimizer behavior, performance tradeoffs, unexpected bugs, or inverse/unapply semantics that shaped your approach, capture those observations in the `Surprises & Discoveries` section with short evidence snippets (test output is ideal).
 * If you change course mid-implementation, document why in the `Decision Log` and reflect the implications in `Progress`. Plans are guides for the next contributor as much as checklists for you.
 * At completion of a major task or the full plan, write an `Outcomes & Retrospective` entry summarizing what was achieved, what remains, and lessons learned.
+* When the full plan's acceptance has passed, run the close-out ritual (the `close-out` skill if available, else its steps manually): sweep the `Decision Log` and `Surprises & Discoveries` for decisions that outlive this plan and record them as ADRs per `docs/adr/README.md`, update the project snapshot (`CLAUDE.md`) with source citations, and stamp the plan complete. After close-out the plan is immutable history — later corrections happen in ADRs, never by retrofitting the plan.
 
 # Prototyping milestones and parallel implementations
 
