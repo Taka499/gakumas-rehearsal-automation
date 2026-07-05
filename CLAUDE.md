@@ -28,6 +28,14 @@ Active ExecPlans (keep their `Progress` sections current; each is self-contained
 Cross-plan decisions live in `docs/adr/` (convention: `docs/adr/README.md`). This list is an index, not a home — one line per active decision; full context, provenance, and lifecycle live in the ADR file. Completed ExecPlans are immutable history; when an ADR corrects something a plan asserted, the ADR wins.
 
 - `docs/adr/0001-reconcile-has-no-js-parity-obligation.md` — **accepted**: `src/ocr/reconcile.rs` has NO JS-parity obligation to the gakumas-tools fork (that constraint was a false agent inference; the #103/#104 ports were one-time contributions). `reconcile.rs` may be freely refactored, subject to its unit tests.
+- `docs/adr/0002-region-based-ocr-supersedes-full-image.md` — **proposed**: per-stage `score_regions` cropping superseded the full-image OCR the Phase-2/Calibration plans declared final; the reversal was undocumented, rationale inferred and awaiting user confirmation.
+- `docs/adr/0003-dual-mode-startup-gui-vs-tray.md` — **accepted**: GUI-by-default vs legacy-tray startup split + message-only hotkey window, forced by eframe/Win32 event-loop incompatibility.
+- `docs/adr/0004-two-phase-loading-detection.md` — **accepted**: loading detection is histogram-vs-reference then brightness, because brightness alone cannot tell "Skip dimmed" from "Skip ready".
+- `docs/adr/0005-bundled-cli-tesseract.md` — **accepted**: OCR shells out to a bundled `tesseract.exe` (30 MB zip embedded, extracted next to the exe); C bindings and %LOCALAPPDATA% rejected.
+- `docs/adr/0006-score-recovery-solver-model.md` — **accepted**: reconcile solver = exhaustive search + total-only checksum (bonus demoted to cross-check) + asymmetric corruption-aware cost; `MAX_SCORE` is a soft 3,000,000 (leading digit may be 2).
+- `docs/adr/0007-verification-is-an-explicit-human-act.md` — **accepted**: flagged rows never auto-clear on checksum satisfaction — only a human ✓ resolves them; `verified` is a `recovery` *value*, not a new CSV column.
+- `docs/adr/0008-screenshots-are-the-source-of-truth-for-progress.md` — **accepted**: `completed` is always recomputed from the screenshot count (crash-proof); only `total` is trusted from `run-meta.json`.
+- `docs/adr/0009-review-saves-rewrite-csvs-append-only-is-capture-scoped.md` — **accepted**: review saves rewrite both CSVs in full together; the append-only discipline is scoped to live capture only.
 
 ## Project Overview
 
@@ -67,7 +75,7 @@ Multi-module Rust application with these key components:
 
 - **src/main.rs**: Entry point, initializes GUI or legacy tray mode
 - **src/paths.rs**: Centralized path resolution (logs/, screenshots/, output/, template/, tesseract/)
-- **src/gui/**: egui-based GUI window. The third column is a single state-driven panel: `render.rs::render_control_panel` branches on `AutomationStatus` and returns a `PanelActions` struct that `mod.rs::update()` dispatches to `handle_*` methods. Add controls by emitting a button → setting a `PanelActions` field → dispatching it, not by rendering everything unconditionally.
+- **src/gui/**: egui-based GUI window. Layout is a top header panel + fixed-width left guide panel + wide right live-chart side panel + central control area (per `docs/EXECPLAN_LIVE_BOX_PLOT.md`; the earlier three-column framing is obsolete). The control panel is a single state-driven unit: `render.rs::render_control_panel` branches on `AutomationStatus` and returns a `PanelActions` struct that `mod.rs::update()` dispatches to `handle_*` methods. Add controls by emitting a button → setting a `PanelActions` field → dispatching it, not by rendering everything unconditionally.
 - **src/capture/**: Window discovery and screenshot capture via Windows Graphics Capture API
 - **src/automation/**: Rehearsal automation state machine, button detection, OCR worker, session metadata/resume (`session_meta.rs`). Every "run N iterations" variant — `start_automation` (fresh), `resume_automation` (finish remaining), `extend_automation` (add more to a finished series) — delegates to `runner.rs::start_automation_inner(iterations, start_iteration, existing_session)`; wrap it rather than duplicating the window/CSV/log/meta/thread setup. After starting, the GUI reads the live total/current from runner atomics (`get_total_iterations`/`get_current_iteration`), not by recomputing.
 - **src/calibration/**: Interactive calibration wizard for button positions
