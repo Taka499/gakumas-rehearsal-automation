@@ -40,6 +40,13 @@ pub struct StageReadout {
 /// higher ones drop a faint comma/Pt pixel that 210 reads as an extra digit.
 const TOTAL_ALT_THRESHOLDS: &[u8] = &[180, 220, 190, 200, 230, 170, 240];
 
+/// Alternate luminance thresholds for the score-row retry, tried in order when
+/// the primary `ocr_threshold` read can't be reconciled. Ordered by distance
+/// from the 190 default. Field evidence (session 20260704_052007): at exactly
+/// 190 Tesseract misreads a trailing "1"/"0" as "2" at the 721x1281 window
+/// size; every neighbouring cutoff reads it correctly.
+const SCORE_ALT_THRESHOLDS: &[u8] = &[200, 180, 210, 170, 220];
+
 /// High-level function: screenshot → per-stage readout using per-stage cropping.
 ///
 /// For each of the 3 stages, crops and OCRs the score row, the isolated stage
@@ -86,6 +93,40 @@ pub fn ocr_screenshot(
         let raw = readout.scores[stage_idx];
         let bonus = readout.bonuses[stage_idx];
         let (mut reconciled, mut flag) = reconcile_stage(raw, readout.totals[stage_idx], bonus);
+
+        // Score-row multi-threshold retry. The score-row binarization is
+        // threshold-sensitive the same way the total's is: at one knife-edge
+        // cutoff a trailing "1"/"0" reads as "2" (session 20260704_052007).
+        // Re-OCR the score crop at alternate thresholds and adopt the first
+        // re-read that reconciles without a flag against the already-read
+        // total/bonus (still no guessing — only an exact checksum is
+        // accepted). Runs only on flagged stages, stops at first success.
+        if flag == Recovery::Flagged {
+            for &alt in SCORE_ALT_THRESHOLDS {
+                if alt == threshold {
+                    continue;
+                }
+                let alt_bin = threshold_bright_pixels(&score_crop, alt);
+                let alt_lines = recognize_image_line(&alt_bin)?;
+                let alt_raw = match extract_single_stage(&alt_lines) {
+                    Ok(s) => s,
+                    Err(_) => continue, // unparseable at this cutoff — try next
+                };
+                if alt_raw == raw {
+                    continue; // same read would reconcile (and flag) identically
+                }
+                let (r2, f2) = reconcile_stage(alt_raw, readout.totals[stage_idx], bonus);
+                if f2 != Recovery::Flagged {
+                    crate::log(&format!(
+                        "OCR stage {}: score retry t{} {:?} -> {:?}",
+                        stage_idx + 1, alt, raw, r2
+                    ));
+                    reconciled = r2;
+                    flag = f2;
+                    break;
+                }
+            }
+        }
 
         // Multi-threshold total retry. The isolated total OCR is threshold-
         // sensitive in opposite directions: at one cutoff a "3" reads as "5", at
@@ -221,5 +262,115 @@ mod e2e_tests {
             }
         }
         assert!(failures.is_empty(), "stage-2 mismatches:\n{}", failures.join("\n"));
+    }
+
+    /// Acceptance for the score-row multi-threshold retry (see
+    /// docs/EXECPLAN_SCORE_ROW_THRESHOLD_RETRY.md). Field screenshots from
+    /// session 20260704_052007: at ocr_threshold 190 Tesseract misreads the
+    /// second score's trailing digit ("276,981" -> "276,982"); the retry
+    /// re-reads at alternate thresholds and adopts the checksum-exact read.
+    /// Both cases must come back Ok (zero-edit reconciliation of the re-read),
+    /// not Repaired/Flagged.
+    #[test]
+    #[ignore = "requires embedded Tesseract + LFS fixtures; run with --ignored"]
+    fn ocr_score_row_retry_e2e() {
+        crate::automation::config::init_config();
+        crate::ocr::ensure_tesseract().expect("extract embedded tesseract");
+        let config = crate::automation::config::get_config();
+
+        // (path, expected stage-1 scores, expected stage-1 recovery)
+        let cases: [(&str, [u32; 3], Recovery); 2] = [
+            // Was FLAGGED (units-edit tie kept the wrong value 568600/276982).
+            ("tests/fixtures/score_retry_samples/107_20260704_053916.png", [568601, 276981, 0], Recovery::Ok),
+            // Field run silently mis-repaired this one to 601170: its total OCR'd
+            // as 1,231,935 that night and the solver bent the score to match.
+            // The pixels read 510,531 / 601,171 with total 1,231,936 (verified by
+            // eye and by re-OCR of the saved PNG); the retry now reads it clean.
+            ("tests/fixtures/score_retry_samples/045_20260704_052733.png", [510531, 601171, 0], Recovery::Ok),
+        ];
+
+        let mut failures = Vec::new();
+        for (path, want_scores, want_rec) in cases {
+            let img = image::open(path)
+                .unwrap_or_else(|e| panic!("open {path}: {e}"))
+                .to_rgba8();
+            let r = ocr_screenshot(&img, &config.ocr_regions())
+                .unwrap_or_else(|e| panic!("ocr {path}: {e}"));
+            println!(
+                "{path}\n  stage1 scores={:?} total={:?} bonus={:?} flag={:?}",
+                r.scores[0], r.totals[0], r.bonuses[0], r.flags[0]
+            );
+            if r.scores[0] != want_scores || r.flags[0] != want_rec {
+                failures.push(format!(
+                    "{path}: got scores={:?} flag={:?}, want scores={:?} flag={:?}",
+                    r.scores[0], r.flags[0], want_scores, want_rec
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "stage-1 mismatches:\n{}", failures.join("\n"));
+    }
+
+    /// Full-session field replay, gated on GAKUMAS_REPLAY_SESSION pointing at a
+    /// session folder (results.csv + screenshots/). Ground truth is the CSV,
+    /// whose flagged rows were hand-corrected in review. Every row whose re-run
+    /// flag is NOT Flagged must match the CSV exactly; rows the pipeline still
+    /// flags are allowed to differ (flagged means "a human must look", and the
+    /// CSV value came from that human). Tesseract-bound: ~10-15 min for 500 rows.
+    #[test]
+    #[ignore = "field replay; set GAKUMAS_REPLAY_SESSION and run with --ignored --nocapture"]
+    fn ocr_session_replay() {
+        let Ok(session) = std::env::var("GAKUMAS_REPLAY_SESSION") else {
+            println!("GAKUMAS_REPLAY_SESSION not set; skipping");
+            return;
+        };
+        crate::automation::config::init_config();
+        crate::ocr::ensure_tesseract().expect("extract embedded tesseract");
+        let config = crate::automation::config::get_config();
+        let regions = config.ocr_regions();
+
+        let csv = std::fs::read_to_string(format!("{session}/results.csv"))
+            .expect("read results.csv");
+        let mut mismatches: Vec<String> = Vec::new();
+        let mut rows = 0u32;
+        let mut still_flagged = 0u32;
+        for line in csv.lines().skip(1) {
+            let f: Vec<&str> = line.split(',').collect();
+            if f.len() < 12 {
+                continue;
+            }
+            let iteration = f[0];
+            let screenshot = f[2];
+            let want: Vec<u32> = f[3..12].iter().map(|s| s.parse().unwrap_or(0)).collect();
+            let img = match image::open(screenshot) {
+                Ok(i) => i.to_rgba8(),
+                Err(e) => {
+                    println!("iter {iteration}: cannot open {screenshot}: {e}");
+                    continue;
+                }
+            };
+            let r = ocr_screenshot(&img, &regions)
+                .unwrap_or_else(|e| panic!("ocr iter {iteration}: {e}"));
+            rows += 1;
+            let got: Vec<u32> = r.scores.iter().flatten().copied().collect();
+            let flagged = r.flags.contains(&Recovery::Flagged);
+            if flagged {
+                still_flagged += 1;
+                println!("iter {iteration}: still flagged (got {:?}, csv {:?})", got, want);
+            } else if got != want {
+                mismatches.push(format!(
+                    "iter {iteration}: got {:?} (flags {:?}), csv {:?}",
+                    got, r.flags, want
+                ));
+            }
+        }
+        println!(
+            "replay: {rows} rows, {} non-flagged mismatches, {still_flagged} still flagged",
+            mismatches.len()
+        );
+        assert!(
+            mismatches.is_empty(),
+            "non-flagged mismatches:\n{}",
+            mismatches.join("\n")
+        );
     }
 }

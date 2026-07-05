@@ -1,3 +1,4 @@
 resources/*.zip filter=lfs diff=lfs merge=lfs -text
 resources/guide/*.png filter=lfs diff=lfs merge=lfs -text
 tests/fixtures/overlap_samples/*.png filter=lfs diff=lfs merge=lfs -text
+tests/fixtures/score_retry_samples/*.png filter=lfs diff=lfs merge=lfs -text
