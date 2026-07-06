@@ -663,19 +663,18 @@ impl GuiApp {
             // whose flag was cleared, which changes the stats without changing scores).
             crate::automation::runner::reload_live_scores_from_csv(&effects.session_path);
             self.live_chart.invalidate();
-            // Charts derive only from the scores, so regenerate them only when a
-            // score actually changed; a verify-only save leaves them identical.
-            if effects.scores_changed {
-                crate::log("GUI: Regenerating charts after review edits...");
-                match crate::analysis::generate_analysis_for_session(&effects.session_path) {
-                    Ok((chart_paths, json_path)) => crate::log(&format!(
-                        "GUI: Charts regenerated: {} files, stats: {}",
-                        chart_paths.len(),
-                        json_path.display()
-                    )),
-                    Err(e) => {
-                        crate::log(&format!("GUI: Failed to regenerate charts: {}", e))
-                    }
+            // Charts exclude flagged rows until verified (docs/adr/0007), so any
+            // save changes chart inputs: a score edit changes values, a verify-only
+            // save re-includes the row. Regenerate unconditionally.
+            crate::log("GUI: Regenerating charts after review save...");
+            match crate::analysis::generate_analysis_for_session(&effects.session_path) {
+                Ok((chart_paths, json_path)) => crate::log(&format!(
+                    "GUI: Charts regenerated: {} files, stats: {}",
+                    chart_paths.len(),
+                    json_path.display()
+                )),
+                Err(e) => {
+                    crate::log(&format!("GUI: Failed to regenerate charts: {}", e))
                 }
             }
             // The save marked the live figure dirty; ensure the main viewport

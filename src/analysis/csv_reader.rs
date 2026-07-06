@@ -18,6 +18,9 @@ pub struct RunData {
     pub screenshot_path: String,
     /// Scores: [stage][criterion], 3 stages with 3 criteria each
     pub scores: [[u32; 3]; 3],
+    /// Recovery state from the optional 13th column ("ok", "repaired",
+    /// "flagged", "manual", "verified"); empty for legacy 12-column CSVs.
+    pub recovery: String,
 }
 
 /// All data loaded from CSV.
@@ -31,13 +34,18 @@ impl DataSet {
     /// Load data from a CSV file.
     ///
     /// CSV format expected:
-    /// iteration,timestamp,screenshot,s1c1,s1c2,s1c3,s2c1,s2c2,s2c3,s3c1,s3c2,s3c3
+    /// iteration,timestamp,screenshot,s1c1,s1c2,s1c3,s2c1,s2c2,s2c3,s3c1,s3c2,s3c3[,recovery]
     ///
     /// Skips the header row and any malformed rows (with warning log).
+    /// Rows whose `recovery` column reads `flagged` are excluded: their stored
+    /// values are one arbitrary checksum-valid candidate, not confirmed data,
+    /// so they stay out of stats and charts until a human verifies them
+    /// (docs/adr/0007) — matching the live distribution figure.
     pub fn from_csv(path: &Path) -> Result<Self> {
         let file = File::open(path).context(format!("Failed to open CSV file: {}", path.display()))?;
         let reader = BufReader::new(file);
         let mut runs = Vec::new();
+        let mut flagged_excluded = 0usize;
 
         for (line_num, line_result) in reader.lines().enumerate() {
             let line = line_result.context("Failed to read line from CSV")?;
@@ -55,7 +63,11 @@ impl DataSet {
             // Parse the line
             match Self::parse_line(&line) {
                 Ok(run_data) => {
-                    runs.push(run_data);
+                    if run_data.recovery == "flagged" {
+                        flagged_excluded += 1;
+                    } else {
+                        runs.push(run_data);
+                    }
                 }
                 Err(e) => {
                     crate::log(&format!(
@@ -65,6 +77,13 @@ impl DataSet {
                     ));
                 }
             }
+        }
+
+        if flagged_excluded > 0 {
+            crate::log(&format!(
+                "Excluded {} flagged row(s) from analysis (unverified; see review window)",
+                flagged_excluded
+            ));
         }
 
         Ok(DataSet { runs })
@@ -98,11 +117,14 @@ impl DataSet {
             }
         }
 
+        let recovery = parts.get(12).map(|s| s.trim().to_string()).unwrap_or_default();
+
         Ok(RunData {
             iteration,
             timestamp,
             screenshot_path,
             scores,
+            recovery,
         })
     }
 
@@ -181,6 +203,28 @@ mod tests {
         let dataset = DataSet::from_csv(file.path()).unwrap();
 
         assert!(dataset.is_empty());
+    }
+
+    #[test]
+    fn test_flagged_rows_excluded_others_included() {
+        // 13-column CSV: flagged is excluded (unverified data, docs/adr/0007);
+        // ok/repaired/manual/verified are included; legacy 12-column rows
+        // (no recovery value) are included.
+        let csv_content = "iteration,timestamp,screenshot,s1c1,s1c2,s1c3,s2c1,s2c2,s2c3,s3c1,s3c2,s3c3,recovery
+1,2026-01-15T10:00:00,t1.png,100,200,300,400,500,600,700,800,900,ok
+2,2026-01-15T10:01:00,t2.png,110,210,310,410,510,610,710,810,910,flagged
+3,2026-01-15T10:02:00,t3.png,120,220,320,420,520,620,720,820,920,repaired
+4,2026-01-15T10:03:00,t4.png,130,230,330,430,530,630,730,830,930,verified
+5,2026-01-15T10:04:00,t5.png,140,240,340,440,540,640,740,840,940";
+
+        let file = create_test_csv(csv_content);
+        let dataset = DataSet::from_csv(file.path()).unwrap();
+
+        assert_eq!(dataset.len(), 4);
+        let iterations: Vec<u32> = dataset.runs.iter().map(|r| r.iteration).collect();
+        assert_eq!(iterations, vec![1, 3, 4, 5]);
+        assert_eq!(dataset.runs[0].recovery, "ok");
+        assert_eq!(dataset.runs[3].recovery, "");
     }
 
     #[test]
