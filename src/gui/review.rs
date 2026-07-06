@@ -25,9 +25,6 @@ use super::state::ReviewState;
 pub struct SaveEffects {
     /// The session whose CSVs were rewritten.
     pub session_path: PathBuf,
-    /// True when at least one score value changed (charts need regenerating);
-    /// false for a verify-only save (flags changed, values identical).
-    pub scores_changed: bool,
 }
 
 /// The review window's controller: state + lifecycle methods.
@@ -143,10 +140,7 @@ impl ReviewController {
                     changed,
                     session_path.display()
                 ));
-                Some(SaveEffects {
-                    session_path,
-                    scores_changed: changed > 0,
-                })
+                Some(SaveEffects { session_path })
             }
             Err(e) => {
                 crate::log(&format!("GUI: Failed to save review edits: {}", e));
