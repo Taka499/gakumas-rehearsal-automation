@@ -736,7 +736,13 @@ fn draw_stage_crop(
     let crop_h_px = (crop.height * tex_sz.y).max(1.0);
     let height = width * (crop_h_px / crop_w_px);
     ui.add_space(2.0);
-    let resp = ui.add(egui::Image::new((tex.id(), Vec2::new(width, height))).uv(uv));
+    // Sense::click is required: egui images default to Sense::hover, on which
+    // secondary_clicked() never fires.
+    let resp = ui.add(
+        egui::Image::new((tex.id(), Vec2::new(width, height)))
+            .uv(uv)
+            .sense(egui::Sense::click()),
+    );
     // Right-click copies this crop at the screenshot's native resolution. The
     // full-screenshot RGBA is not retained after texture upload, so re-read the
     // PNG from disk and cut the same relative rect out of it. `crop` is Copy;

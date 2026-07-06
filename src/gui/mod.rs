@@ -810,7 +810,12 @@ impl eframe::App for GuiApp {
                                 // Scale to the panel width, preserving the figure's aspect.
                                 let w = ui.available_width();
                                 let aspect = size[1] as f32 / size[0] as f32;
-                                let resp = ui.image((tex_id, Vec2::new(w, w * aspect)));
+                                // Images are Sense::hover() by default — without an
+                                // explicit click sense, secondary_clicked() never fires.
+                                let resp = ui.add(
+                                    egui::Image::new((tex_id, Vec2::new(w, w * aspect)))
+                                        .sense(egui::Sense::click()),
+                                );
                                 // Right-click copies the figure at native resolution:
                                 // re-rendered from the exact stats behind the displayed
                                 // texture (the RGBA buffer is not retained after upload).
