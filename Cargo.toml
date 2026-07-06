@@ -44,6 +44,7 @@ plotters = "0.3"
 # GUI (Phase 5)
 eframe = "0.29"
 tray-icon = "0.19"
+arboard = "3"
 
 [build-dependencies]
 embed-resource = "3"

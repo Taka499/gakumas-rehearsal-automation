@@ -4,6 +4,7 @@
 
 use eframe::egui::{self, Color32, RichText, TextureHandle, Vec2};
 
+use super::copyable::CopyToast;
 use super::state::{AutomationStatus, GuiState, ReviewState};
 use crate::analysis::statistics::{ColumnStats, DataSetStats};
 
@@ -515,6 +516,7 @@ pub fn render_review_window_contents(
     ui: &mut egui::Ui,
     review: &mut ReviewState,
     actions: &mut ReviewActions,
+    copy_toast: &mut Option<CopyToast>,
 ) {
     ui.horizontal(|ui| {
         // Per-status visibility toggles (attention-first). Each is colour-matched
@@ -664,7 +666,7 @@ pub fn render_review_window_contents(
                             // of `review.edits` above has ended, so the immutable
                             // read of `review.preview` here is fine.
                             if expanded {
-                                draw_stage_crop(ui, review, iteration, s, group_w);
+                                draw_stage_crop(ui, review, iteration, s, group_w, copy_toast);
                             }
                         });
                     }
@@ -706,6 +708,7 @@ fn draw_stage_crop(
     iteration: u32,
     stage: usize,
     width: f32,
+    copy_toast: &mut Option<CopyToast>,
 ) {
     let tex = match &review.preview {
         Some((iter, tex)) if *iter == iteration => tex,
@@ -733,7 +736,34 @@ fn draw_stage_crop(
     let crop_h_px = (crop.height * tex_sz.y).max(1.0);
     let height = width * (crop_h_px / crop_w_px);
     ui.add_space(2.0);
-    ui.add(egui::Image::new((tex.id(), Vec2::new(width, height))).uv(uv));
+    let resp = ui.add(egui::Image::new((tex.id(), Vec2::new(width, height))).uv(uv));
+    // Right-click copies this crop at the screenshot's native resolution. The
+    // full-screenshot RGBA is not retained after texture upload, so re-read the
+    // PNG from disk and cut the same relative rect out of it. `crop` is Copy;
+    // the path is snapshotted so the closure borrows nothing from `review`.
+    let path = review
+        .rows
+        .iter()
+        .find(|r| r.iteration == iteration)
+        .map(|r| r.screenshot.clone());
+    super::copyable::copy_on_right_click(
+        ui,
+        &resp,
+        egui::Id::new(("copy_stage_crop", iteration, stage)),
+        copy_toast,
+        move || {
+            let path =
+                path.ok_or_else(|| anyhow::anyhow!("iteration {} not in review rows", iteration))?;
+            let img = image::open(&path)?.to_rgba8();
+            let (iw, ih) = (img.width(), img.height());
+            let x = ((crop.x * iw as f32).round() as u32).min(iw.saturating_sub(1));
+            let y = ((crop.y * ih as f32).round() as u32).min(ih.saturating_sub(1));
+            let w = ((crop.width * iw as f32).round() as u32).clamp(1, iw - x);
+            let h = ((crop.height * ih as f32).round() as u32).clamp(1, ih - y);
+            let cropped = image::imageops::crop_imm(&img, x, y, w, h).to_image();
+            Ok((w, h, cropped.into_raw()))
+        },
+    );
 }
 
 /// Idle-only resume picker, collapsed by default so it never feels always-on.
