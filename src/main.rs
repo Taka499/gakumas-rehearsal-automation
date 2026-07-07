@@ -16,6 +16,7 @@ mod capture;
 mod gui;
 mod ocr;
 mod paths;
+mod update;
 
 use anyhow::{anyhow, Result};
 use chrono::Local;
