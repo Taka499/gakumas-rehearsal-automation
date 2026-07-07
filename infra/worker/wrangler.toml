@@ -1,0 +1,10 @@
+name = "tia-run-dist"
+main = "worker.js"
+compatibility_date = "2026-07-01"
+
+# Custom domain: Cloudflare creates/manages the DNS record for tia.run
+# automatically when this deploys (the zone must exist in the same account,
+# which it does — the domain is registered there).
+routes = [
+  { pattern = "tia.run", custom_domain = true }
+]
