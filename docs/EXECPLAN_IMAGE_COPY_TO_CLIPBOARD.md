@@ -22,7 +22,8 @@ The interaction machinery is deliberately built as a small reusable wrapper — 
 - [x] (2026-07-07) The user's interactive round-trip runs showed NO test-harness output — explained: `#![windows_subsystem = "windows"]` made the test harness a GUI-subsystem exe, which never attaches to an interactive console (output only shows when stdout is a pipe, as in agent shells/CI). Fixed in `src/main.rs` with `#![cfg_attr(not(test), windows_subsystem = "windows")]`; verified via PE header that the release exe stays subsystem 2 (GUI) and the test harness is now 3 (console). The round-trip failure itself is still undiagnosed — output was invisible; awaiting a re-run.
 - [x] (2026-07-07) In-app acceptance PASSED on both surfaces after the Sense::click fix (user-confirmed: right-click copies and the toast shows).
 - [x] (2026-07-07) Round-trip failure diagnosed with visible output: `arboard::get_image`'s PNG read path fails even on the healthy desktop (write path + real paste targets fine). Test rewritten to read back via WinForms `Clipboard.GetImage` (independent consumer) and pixel-compare a saved temp PNG; Decision Log updated.
-- [ ] Final acceptance (manual, needs the interactive desktop): run `GAKUMAS_NO_MANIFEST=1 cargo test clipboard_roundtrip -- --ignored --nocapture` from a normal terminal (expect 1 passed); optionally exercise the failure toast per Validation and Acceptance.
+- [x] (2026-07-07) Final acceptance PASSED: the rewritten round-trip test passed on the user's interactive terminal (`1 passed; 0 failed` via the WinForms consumer, pixel-exact), on top of the earlier user-confirmed in-app click-through on both surfaces.
+- [x] (2026-07-07) PLAN COMPLETE — closed out per docs/adr/README.md: retrospective written, durable decision extracted to `docs/adr/0010`, CLAUDE.md snapshot updated. This document is now immutable history.
 
 ## Surprises & Discoveries
 
@@ -77,7 +78,11 @@ The interaction machinery is deliberately built as a small reusable wrapper — 
 
 ## Outcomes & Retrospective
 
-- (to be written at completion)
+Delivered exactly what the Purpose section promised, in one day (design interview → acceptance 2026-07-07): right-clicking the live box plot or a review stage crop copies the image at native resolution to the Windows clipboard with an on-image fade toast, built on a reusable `copy_on_right_click` wrapper (`src/gui/copyable.rs`) that future image surfaces can adopt with one call — provided they build the image widget with `.sense(egui::Sense::click())`. Acceptance: user click-through passed on both surfaces (copy + toast + real paste), and the round-trip test passed pixel-exact through an independent WinForms consumer.
+
+What remains: nothing in scope. Natural follow-ups if demand appears: copy-as-text for the live stats table (explicitly deferred), and wiring additional surfaces via the wrapper.
+
+Lessons learned. First, compilation and unit tests proved everything except the one thing that mattered: egui images don't sense clicks by default, so the feature was inert until a human right-clicked it — interaction wiring needs a hands-on acceptance pass, always. Second, that acceptance pass was nearly blinded by an unrelated repo-wide paper cut (`windows_subsystem = "windows"` silencing all test output in interactive consoles), and the debugging that followed initially misattributed arboard's broken read path to the agent environment; the user's desktop run disproved that, and the Surprises section was corrected rather than left plausible-but-wrong. Both mid-flight discoveries produced fixes that outlive this plan (the `cfg_attr(not(test))` gate; ADR 0010's write-only-arboard rule). Third, the three-red-herrings diagnosis (invisible output → environment → library read path) was only untangled because each round captured concrete evidence before theorizing — the PE-subsystem check and the PowerShell external-consumer probe each eliminated a whole hypothesis class in one step.
 
 ## Context and Orientation
 
