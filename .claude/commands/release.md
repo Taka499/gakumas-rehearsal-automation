@@ -1,4 +1,4 @@
-Push main and publish a new versioned GitHub release of gakumas-rehearsal-automation (build → package → zip → `gh release`). Use this whenever the user asks to "cut a release", "make a release", "publish a new version", "ship it", or "do a release" for this repo.
+Push main and publish a new versioned release of gakumas-rehearsal-automation to the distribution repo `tia-tools/releases` (build → package → zip → sha256 → `gh release` as the bot account). Use this whenever the user asks to "cut a release", "make a release", "publish a new version", "ship it", or "do a release" for this repo.
 
 Usage: /release [optional version or one-line theme, e.g. "v0.4.0 additional runs"]
 
@@ -6,10 +6,11 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
 
 ## Background facts about this repo
 
-- **The release version is the git tag / `gh` release.** Find the latest with `gh release list`. Keep `Cargo.toml`'s `version` in sync: bump it to the release version and commit before tagging.
+- **Distribution is identity-separated (per `docs/adr/0011`).** New release assets publish ONLY to `tia-tools/releases`, authored by the machine account `tia-tools-bot` via its fine-grained PAT, which is stored in the repo-root `.env` (gitignored) as `GAKUMAS_DIST_TOKEN`. NEVER run `gh release create` against the dist repo with ambient `gh auth` — that would stamp the personal account as the release author on the public page, defeating the whole channel. NEVER publish new assets to the personal repo (its pre-v0.9 releases are frozen history).
+- **The release version is the git tag.** The tag `vX.Y.Z` is pushed to THIS repo (source of truth for version history) and the release of the same tag is created on `tia-tools/releases`. Find the latest with `git tag --sort=-v:refname | head -5` and `gh release list -R tia-tools/releases -L 5` (the dist repo only has releases from v0.9-era onward; older ones live on the personal repo). Keep `Cargo.toml`'s `version` in sync: bump it to the release version and commit before tagging.
 - **Version bump convention:** new user-facing feature(s) → minor bump (`v0.X.0`); bug fix / small change → patch bump (`v0.X.Y`). This mirrors the existing history (v0.2.0, v0.3.0 were feature releases; v0.3.1–v0.3.3 were fixes).
 - **`scripts/package-release.ps1`** builds the optimized binary and assembles `release/gakumas-rehearsal-automation/` (exe + config.json + resources/). It does not zip and does not take a version.
-- **The release asset is a zip** named `gakumas-rehearsal-automation-vX.Y.Z.zip` whose top-level folder is `gakumas-rehearsal-automation/` (matches every prior release).
+- **The release asset is a zip** named `gakumas-rehearsal-automation-vX.Y.Z.zip` whose top-level folder is `gakumas-rehearsal-automation/` (matches every prior release), accompanied by a `.sha256` sidecar (consumed by the in-app updater for download verification).
 - **The binary requires administrator elevation** (Windows manifest) to run, because `SendInput` must drive an elevated game process.
 - Git on Windows prints `LF will be replaced by CRLF` warnings — these are noise, not errors.
 
@@ -18,11 +19,14 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
 1. **Pre-flight.** Confirm the working state is releasable:
    - On `main` with the intended commits merged: `git status -sb` and `git log --oneline -5`.
    - Build is green: `cargo build --release 2>&1 | grep -E "^error" || echo OK` (only `error:` lines matter; ~30 warnings are expected).
+   - The bot PAT is available: `grep -q GAKUMAS_DIST_TOKEN .env && echo TOKEN-PRESENT`.
    - **Remind the user** that the GUI binary needs admin elevation and that the manual game-acceptance scenarios for whatever shipped should have passed before releasing. If acceptance has not been done, ask whether to proceed anyway.
 
 2. **Determine and CONFIRM the version.** Find the latest published version, then propose the next one:
 
-       gh release list -L 5
+       git tag --sort=-v:refname | head -5
+       set -a; source .env; set +a
+       GH_TOKEN="$GAKUMAS_DIST_TOKEN" gh release list -R tia-tools/releases -L 5
 
    Decide minor vs patch from what changed (feature → `v0.X.0`, fix → `v0.X.Y`). Tell the user your proposed version and reasoning, and **wait for explicit confirmation** before continuing. If they gave a version in `$ARGUMENTS`, confirm it still makes sense against the latest release.
 
@@ -43,7 +47,7 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
        Download `gakumas-rehearsal-automation-vX.Y.Z.zip`, extract, and run `gakumas-rehearsal-automation.exe` as administrator. Embedded Tesseract OCR extracts on first run.
        EOF
 
-   Keep the notes focused on what the user can now do. Get the user's OK on the draft.
+   Keep the notes focused on what the user can now do, in a neutral voice (no personal links or signatures — the dist repo is the identity-separated channel). Get the user's OK on the draft.
 
 6. **Build and package** (assembles `release/gakumas-rehearsal-automation/`):
 
@@ -57,24 +61,42 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
 
        unzip -l gakumas-rehearsal-automation-vX.Y.Z.zip | head -8
 
-9. **Publish the release** (creates the tag at `main` and uploads the zip):
+9. **Create the sha256 sidecar** (the in-app updater verifies downloads against this):
 
-       gh release create vX.Y.Z gakumas-rehearsal-automation-vX.Y.Z.zip \
-         --target main \
-         --title "vX.Y.Z - <short theme>" \
-         --notes-file /tmp/release-notes-vX.Y.Z.md
+       sha256sum gakumas-rehearsal-automation-vX.Y.Z.zip | awk '{print $1}' > gakumas-rehearsal-automation-vX.Y.Z.zip.sha256
+       cat gakumas-rehearsal-automation-vX.Y.Z.zip.sha256   # 64 hex chars
 
-10. **Verify it published** and is marked Latest:
+10. **Privacy scrub.** The artifacts must contain no identifying strings. Expect `0` from both (any hit → STOP and investigate before publishing):
 
-        gh release view vX.Y.Z --json tagName,name,assets,isDraft,isPrerelease \
-          -q '"tag: \(.tagName)  draft: \(.isDraft)  prerelease: \(.isPrerelease)\nassets: \(.assets | map(.name) | join(", "))"'
-        gh release list -L 1
+        grep -ac "takatomo\|Taka499" release/gakumas-rehearsal-automation/gakumas-rehearsal-automation.exe || echo 0
+        grep -ac "takatomo\|Taka499" gakumas-rehearsal-automation-vX.Y.Z.zip || echo 0
 
-    Report the release URL.
+11. **Tag this repo** (version history stays with the source):
 
-11. **Cleanup (offer, don't assume).** The published zip also sits in the working dir; older `gakumas-rehearsal-automation-v*.zip` files may linger. Offer to delete superseded zips. Do NOT touch the tracked tree or commit anything here — these zips are untracked artifacts.
+        git tag vX.Y.Z && git push origin vX.Y.Z
+
+12. **Publish the release to the dist repo AS THE BOT** (uploads zip + sidecar; no `--target` — the dist repo's default branch is fine):
+
+        set -a; source .env; set +a
+        GH_TOKEN="$GAKUMAS_DIST_TOKEN" gh release create vX.Y.Z \
+          gakumas-rehearsal-automation-vX.Y.Z.zip \
+          gakumas-rehearsal-automation-vX.Y.Z.zip.sha256 \
+          -R tia-tools/releases \
+          --title "vX.Y.Z - <short theme>" \
+          --notes-file /tmp/release-notes-vX.Y.Z.md
+
+13. **Verify it published, is marked Latest, and — critically — is authored by the bot:**
+
+        GH_TOKEN="$GAKUMAS_DIST_TOKEN" gh release view vX.Y.Z -R tia-tools/releases \
+          --json tagName,name,assets,isDraft,isPrerelease,author \
+          -q '"tag: \(.tagName)  author: \(.author.login)  draft: \(.isDraft)\nassets: \(.assets | map(.name) | join(", "))"'
+
+    `author` MUST be `tia-tools-bot`. If it shows the personal account, the wrong token was used: delete the release (`gh release delete` with the same `-R`), fix the token, and republish. Report the release URL (`https://github.com/tia-tools/releases/releases/tag/vX.Y.Z`).
+
+14. **Cleanup (offer, don't assume).** The published zip and `.sha256` also sit in the working dir; older `gakumas-rehearsal-automation-v*.zip*` files may linger. Offer to delete superseded ones. Do NOT touch the tracked tree or commit anything here — these are untracked artifacts.
 
 ## Notes
 
-- If `gh release create` fails because the tag already exists, the version was likely already published — re-check `gh release list` and pick the next number rather than overwriting.
+- If `gh release create` fails because the tag already exists on the dist repo, the version was likely already published — re-check `gh release list -R tia-tools/releases` and pick the next number rather than overwriting.
+- If the dist repo's README is still a stub, offer to write it while publishing: neutral-voice description of the tool + install steps (download zip → extract → run as administrator), linking nowhere personal.
 - Do not push or publish without the user's go-ahead on version (step 2) and notes (step 5). The local Cargo.toml commit (step 3) is reversible; from the push (step 4) onward it is visible to others.
