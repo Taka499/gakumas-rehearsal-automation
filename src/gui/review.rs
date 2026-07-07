@@ -18,6 +18,7 @@ use crate::automation::results_edit::{
     load_review_rows, save_review_rows, ReviewRow, RECOVERY_MANUAL, RECOVERY_VERIFIED,
 };
 
+use super::copyable::CopyToast;
 use super::render::{self, ReviewActions};
 use super::state::ReviewState;
 
@@ -156,7 +157,11 @@ impl ReviewController {
     /// The review lives in its OWN top-level OS window (an egui *immediate
     /// viewport*), not a panel floating inside the main window, so it is resized
     /// independently and is never clipped by the main window's bounds.
-    pub fn show(&mut self, ctx: &egui::Context) -> Option<SaveEffects> {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        copy_toast: &mut Option<CopyToast>,
+    ) -> Option<SaveEffects> {
         if !self.state.as_ref().map_or(false, |r| r.open) {
             return None;
         }
@@ -173,7 +178,7 @@ impl ReviewController {
             |vp_ctx, _class| {
                 egui::CentralPanel::default().show(vp_ctx, |ui| {
                     let review = self.state.as_mut().unwrap();
-                    render::render_review_window_contents(ui, review, &mut actions);
+                    render::render_review_window_contents(ui, review, &mut actions, copy_toast);
                 });
                 if vp_ctx.input(|i| i.viewport().close_requested()) {
                     actions.close = true;

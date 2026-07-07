@@ -2,6 +2,8 @@
 //!
 //! Provides a graphical interface using egui/eframe for user interaction.
 
+mod clipboard;
+pub(crate) mod copyable;
 mod live_chart;
 pub mod render;
 mod review;
@@ -24,6 +26,7 @@ use crate::automation::runner::{
 use crate::automation::results_edit::load_review_rows;
 use crate::automation::state::request_abort;
 
+use copyable::CopyToast;
 use live_chart::LiveChartCache;
 use review::ReviewController;
 use state::{AutomationStatus, GuiState};
@@ -113,6 +116,9 @@ pub struct GuiApp {
     live_chart: LiveChartCache,
     /// The OCR review/edit window's controller (open/preview/save lifecycle).
     review: ReviewController,
+    /// The single shared slot for the right-click-copy fade notice; painted
+    /// over whichever image was copied last (see `copyable`).
+    copy_toast: Option<CopyToast>,
     /// Whether the window is currently expanded to make room for the live plot
     /// side panel. Used to resize once on show/hide rather than every frame.
     live_chart_expanded: bool,
@@ -153,6 +159,7 @@ impl GuiApp {
             images_loaded: false,
             live_chart: LiveChartCache::new(),
             review: ReviewController::new(),
+            copy_toast: None,
             // Seed to match the persisted preference so the initial viewport size
             // (chosen in run_gui) is not resized on the first frame.
             live_chart_expanded: settings.show_live_chart,
@@ -653,7 +660,7 @@ impl GuiApp {
     /// (open/preview/edit/save) lives in `ReviewController`; the reactions
     /// below touch subsystems the review window should not own.
     fn render_review_window(&mut self, ctx: &egui::Context) {
-        if let Some(effects) = self.review.show(ctx) {
+        if let Some(effects) = self.review.show(ctx, &mut self.copy_toast) {
             // Keep the finished-panel prompt's count in step with the saved
             // recovery flags (a verified/manual row leaves the attention set).
             self.state.attention_counts =
@@ -795,12 +802,36 @@ impl eframe::App for GuiApp {
                                 .weak(),
                             );
                             ui.add_space(6.0);
-                            if let Some(tex) = self.live_chart.texture() {
+                            // Snapshot the Copy handles first so the texture
+                            // borrow does not overlap the `&mut` borrow of the
+                            // copy-toast slot below (E0502 otherwise).
+                            let plot_tex = self.live_chart.texture().map(|t| (t.id(), t.size()));
+                            if let Some((tex_id, size)) = plot_tex {
                                 // Scale to the panel width, preserving the figure's aspect.
                                 let w = ui.available_width();
-                                let size = tex.size();
                                 let aspect = size[1] as f32 / size[0] as f32;
-                                ui.image((tex.id(), Vec2::new(w, w * aspect)));
+                                // Images are Sense::hover() by default — without an
+                                // explicit click sense, secondary_clicked() never fires.
+                                let resp = ui.add(
+                                    egui::Image::new((tex_id, Vec2::new(w, w * aspect)))
+                                        .sense(egui::Sense::click()),
+                                );
+                                // Right-click copies the figure at native resolution:
+                                // re-rendered from the exact stats behind the displayed
+                                // texture (the RGBA buffer is not retained after upload).
+                                let stats = self.live_chart.stats().cloned();
+                                copyable::copy_on_right_click(
+                                    ui,
+                                    &resp,
+                                    egui::Id::new("copy_live_plot"),
+                                    &mut self.copy_toast,
+                                    move || {
+                                        let stats = stats.ok_or_else(|| {
+                                            anyhow::anyhow!("live stats not available")
+                                        })?;
+                                        crate::analysis::charts::render_live_box_plot_rgba(&stats)
+                                    },
+                                );
                             }
                             ui.add_space(10.0);
                             if let Some(stats) = self.live_chart.stats() {

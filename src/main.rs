@@ -3,8 +3,11 @@
 //! A Windows system tray application that captures screenshots of the
 //! gakumas.exe game window using the Windows Graphics Capture API.
 
-// Hide console window on Windows for GUI mode
-#![windows_subsystem = "windows"]
+// Hide console window on Windows for GUI mode — but NOT for the test harness:
+// a GUI-subsystem test binary never attaches to an interactive console, so
+// `cargo test` run from PowerShell shows no test output at all (it only shows
+// up when stdout is a pipe, e.g. under CI or an agent shell).
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod analysis;
 mod automation;
