@@ -145,6 +145,9 @@ fn main() -> Result<()> {
     // Ensure output directories exist
     paths::ensure_directories()?;
 
+    // Remove leftovers from a previous self-update (<exe>.old, resources.old).
+    update::install::cleanup_old_files();
+
     // Ensure Tesseract is available (extracts from embedded zip if needed)
     if let Err(e) = ocr::ensure_tesseract() {
         log(&format!("Warning: Failed to setup Tesseract: {}", e));

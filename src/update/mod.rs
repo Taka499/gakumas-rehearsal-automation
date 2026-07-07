@@ -8,6 +8,7 @@
 //! blocking network I/O with short timeouts.
 
 mod endpoints;
+pub mod install;
 
 use std::time::Duration;
 

@@ -60,6 +60,26 @@ impl std::fmt::Debug for ReviewState {
     }
 }
 
+/// Auto-update UI state, shown in the header panel (see
+/// docs/EXECPLAN_AUTO_UPDATE_DISTRIBUTION.md M4). Fed by a background check
+/// thread at startup; install runs on a worker thread. All failures are inert:
+/// the app keeps working as-is.
+#[derive(Clone, Debug, Default)]
+pub enum UpdateUiState {
+    /// No update known: check still pending, channel unreachable (silent by
+    /// design), or already up to date.
+    #[default]
+    Idle,
+    /// A newer release exists; the header shows the one-click update button.
+    Available(crate::update::UpdateInfo),
+    /// Download + verify + install running on a worker thread.
+    Downloading,
+    /// Installed and swapped in; the new exe takes over on the next launch.
+    ReadyToRestart,
+    /// Install failed; the running installation is untouched.
+    Failed(String),
+}
+
 /// Automation status for display in GUI.
 #[derive(Clone, Debug)]
 pub enum AutomationStatus {
@@ -205,6 +225,8 @@ pub struct GuiState {
     /// The texture itself lives on `GuiApp` (a `TextureHandle` is not `Debug`);
     /// this is just the user's show/hide preference.
     pub show_live_chart: bool,
+    /// Auto-update notice state for the header panel.
+    pub update: UpdateUiState,
 }
 
 impl Default for GuiState {
@@ -219,6 +241,7 @@ impl Default for GuiState {
             selected_resume: None,
             attention_counts: None,
             show_live_chart: false,
+            update: UpdateUiState::Idle,
         }
     }
 }

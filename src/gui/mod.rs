@@ -29,7 +29,17 @@ use crate::automation::state::request_abort;
 use copyable::CopyToast;
 use live_chart::LiveChartCache;
 use review::ReviewController;
-use state::{AutomationStatus, GuiState};
+use state::{AutomationStatus, GuiState, UpdateUiState};
+
+/// Messages from the update worker threads (check at startup, install on
+/// click) back to the GUI thread. Results arrive via `try_recv` polling in
+/// `update()`; the workers `request_repaint` so a result shows immediately.
+enum UpdateMsg {
+    /// The startup check found a strictly newer release.
+    UpdateAvailable(crate::update::UpdateInfo),
+    /// download_and_install finished (`Err` carries the display message).
+    InstallDone(Result<(), String>),
+}
 
 /// Menu item IDs for tray menu
 const MENU_SHOW_WINDOW: &str = "show_window";
@@ -132,6 +142,10 @@ pub struct GuiApp {
     menu_event_receiver: Option<tray_icon::menu::MenuEventReceiver>,
     /// Flag to request exit from tray menu.
     exit_requested: bool,
+    /// Sender cloned into update worker threads (check + install).
+    update_tx: std::sync::mpsc::Sender<UpdateMsg>,
+    /// Results from the update worker threads, polled each frame.
+    update_rx: std::sync::mpsc::Receiver<UpdateMsg>,
 }
 
 impl GuiApp {
@@ -153,6 +167,21 @@ impl GuiApp {
         let mut state = GuiState::default();
         state.show_live_chart = settings.show_live_chart;
 
+        // Fire the update check on a worker thread: check_for_update() does
+        // blocking network I/O (up to ~30 s worst case) and must never touch
+        // the GUI thread. No news (no update / check failed) sends nothing.
+        let (update_tx, update_rx) = std::sync::mpsc::channel();
+        {
+            let tx = update_tx.clone();
+            let ctx = cc.egui_ctx.clone();
+            std::thread::spawn(move || {
+                if let Some(info) = crate::update::check_for_update() {
+                    let _ = tx.send(UpdateMsg::UpdateAvailable(info));
+                    ctx.request_repaint();
+                }
+            });
+        }
+
         let mut app = Self {
             state,
             guide_images: [None, None],
@@ -167,6 +196,8 @@ impl GuiApp {
             tray_icon,
             menu_event_receiver,
             exit_requested: false,
+            update_tx,
+            update_rx,
         };
         // Populate the resume picker with interrupted sessions found on disk.
         app.scan_resumable_sessions();
@@ -702,6 +733,66 @@ impl GuiApp {
             }
         }
     }
+
+    /// Drain results from the update worker threads into the UI state.
+    fn poll_update_messages(&mut self) {
+        while let Ok(msg) = self.update_rx.try_recv() {
+            match msg {
+                UpdateMsg::UpdateAvailable(info) => {
+                    // Only surface the startup check's result from Idle: don't
+                    // stomp an install already in progress or finished.
+                    if matches!(self.state.update, UpdateUiState::Idle) {
+                        crate::log(&format!("GUI: update available: v{}", info.version));
+                        self.state.update = UpdateUiState::Available(info);
+                    }
+                }
+                UpdateMsg::InstallDone(Ok(())) => {
+                    self.state.update = UpdateUiState::ReadyToRestart;
+                }
+                UpdateMsg::InstallDone(Err(e)) => {
+                    crate::log(&format!("GUI: update install failed: {}", e));
+                    self.state.update = UpdateUiState::Failed(e);
+                }
+            }
+        }
+    }
+
+    /// Handle the header's アップデート button: run download → verify → swap on
+    /// a worker thread (blocking network + file I/O must stay off the GUI thread).
+    fn handle_install_update(&mut self, ctx: &egui::Context) {
+        let info = match &self.state.update {
+            UpdateUiState::Available(info) => info.clone(),
+            _ => return,
+        };
+        crate::log(&format!("GUI: installing update v{}", info.version));
+        self.state.update = UpdateUiState::Downloading;
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = crate::update::install::download_and_install(&info)
+                .map_err(|e| e.to_string());
+            let _ = tx.send(UpdateMsg::InstallDone(result));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Handle the header's 再起動 button after a successful install: spawn the
+    /// (now updated) exe and exit this process. The child inherits this
+    /// process's admin elevation, so no extra UAC prompt appears.
+    fn handle_restart(&mut self) {
+        let spawn = std::env::current_exe()
+            .and_then(|exe| std::process::Command::new(exe).spawn());
+        match spawn {
+            Ok(_) => {
+                crate::log("GUI: restarting into the updated exe");
+                self.exit_requested = true;
+            }
+            Err(e) => {
+                self.state.update =
+                    UpdateUiState::Failed(format!("再起動に失敗しました: {}", e));
+            }
+        }
+    }
 }
 
 impl eframe::App for GuiApp {
@@ -723,6 +814,14 @@ impl eframe::App for GuiApp {
 
         // Poll automation status
         self.update_automation_status();
+
+        // Drain update-check/install results from the worker threads.
+        self.poll_update_messages();
+
+        // Keep the download spinner animating while an install runs.
+        if matches!(self.state.update, UpdateUiState::Downloading) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
 
         // Rebuild the live distribution figure when new iteration data has arrived.
         self.update_live_chart(ctx);
@@ -756,7 +855,13 @@ impl eframe::App for GuiApp {
         }
 
         // Header spanning the full width. No separator line (it looked awkward above
-        // the columns, which originally had none).
+        // the columns, which originally had none). The update notice renders here so
+        // it is visible in every panel state; its actions are collected as flags and
+        // dispatched after the closure (the closure immutably matches on state).
+        let mut install_clicked = false;
+        let mut restart_clicked = false;
+        let mut dismiss_update_error = false;
+        let automation_running = self.state.status.is_running();
         egui::TopBottomPanel::top("header_panel")
             .show_separator_line(false)
             .show(ctx, |ui| {
@@ -769,8 +874,74 @@ impl eframe::App for GuiApp {
                 .small()
                 .weak(),
             );
+            match &self.state.update {
+                UpdateUiState::Idle => {}
+                UpdateUiState::Available(info) => {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "🔄 新しいバージョン v{} が利用可能です",
+                                info.version
+                            ))
+                            .color(egui::Color32::from_rgb(0x2e, 0x7d, 0x32)),
+                        );
+                        let button =
+                            ui.add_enabled(!automation_running, egui::Button::new("アップデート"));
+                        let button = if info.notes.is_empty() {
+                            button
+                        } else {
+                            button.on_hover_text(&info.notes)
+                        };
+                        if button.clicked() {
+                            install_clicked = true;
+                        }
+                        if automation_running {
+                            ui.label(
+                                egui::RichText::new("(自動実行中は更新できません)")
+                                    .small()
+                                    .weak(),
+                            );
+                        }
+                    });
+                }
+                UpdateUiState::Downloading => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("アップデートをダウンロード中...");
+                    });
+                }
+                UpdateUiState::ReadyToRestart => {
+                    ui.horizontal(|ui| {
+                        ui.label("✅ 更新の準備ができました。再起動すると新しいバージョンになります");
+                        if ui.button("再起動").clicked() {
+                            restart_clicked = true;
+                        }
+                    });
+                }
+                UpdateUiState::Failed(message) => {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("⚠ 更新に失敗しました: {}", message))
+                                .color(egui::Color32::RED)
+                                .small(),
+                        );
+                        if ui.small_button("×").clicked() {
+                            dismiss_update_error = true;
+                        }
+                    });
+                }
+            }
             ui.add_space(4.0);
         });
+        if install_clicked {
+            self.handle_install_update(ctx);
+        }
+        if restart_clicked {
+            self.handle_restart();
+        }
+        if dismiss_update_error {
+            self.state.update = UpdateUiState::Idle;
+        }
 
         // Left: the rehearsal-page guide image (fixed width).
         egui::SidePanel::left("guide_panel")
