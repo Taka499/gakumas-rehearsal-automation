@@ -16,3 +16,6 @@ __pycache__/
 .uv/
 
 .env*
+
+# Cloudflare Worker local artifacts (infra/worker)
+.wrangler/
