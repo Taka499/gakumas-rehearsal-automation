@@ -21,7 +21,10 @@ You can see it working two ways. Positive: cut a signed release, run an older si
 
 ## Surprises & Discoveries
 
-- (none yet)
+- Observation: the signing test fixture must be marked binary in `.gitattributes` (`tests/fixtures/signing/* -text`), or git's autocrlf rewrites its line endings on checkout and the committed signature no longer matches the on-disk bytes the test reads.
+  Evidence: `git add` warned `LF will be replaced by CRLF` on `sample.bin`; after the `.gitattributes` rule, `git check-attr text -- tests/fixtures/signing/sample.bin` reports `text: unset`.
+- Observation: minisign key generation must not be run via a backgrounded/non-interactive shell — `rsign generate` blocks on an interactive password prompt and, if it later receives input, would generate a DIFFERENT keypair and overwrite the real one (a trust-breaking event). The keypair was generated interactively by the developer; the agent-launched attempt was stopped.
+  Evidence: the background task sat at "Please enter a password to protect the secret key." with a 0-byte `.pub`; the real key is at `~/.minisign/gakumas.key` (259 bytes).
 
 ## Decision Log
 
