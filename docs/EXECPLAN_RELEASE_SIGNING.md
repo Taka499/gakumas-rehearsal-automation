@@ -17,7 +17,7 @@ You can see it working two ways. Positive: cut a signed release, run an older si
 - [x] (2026-07-08) M1: keypair generated (`~/.minisign/gakumas.key`, password-protected, offline-backed; public key `RWSsK+YIsZpesxIA/...` recorded); `.claude/commands/release.md` gained step 9a (sign) + `.minisig` in the upload list + background facts. `.gitignore` hardened against committing key files. (Signing stays in the skill, not `package-release.ps1`, as planned.)
 - [x] (2026-07-08) M2: `PUBLIC_KEY` + `ALLOWED_DOWNLOAD_HOSTS` in `endpoints.rs`; `UpdateInfo.sig_url`; `parse_manifest`/`parse_github_release` surface the signature on both paths; `validated()` now requires a signature and an allowlisted download host (finding #2); `install.rs` verifies the signature with the embedded key BEFORE the hash, before extract/swap. 17 updater unit tests pass (incl. new missing-signature, off-host, and exact-host-match rejections). `#[ignore]`d `verify_signature_accepts_genuine_and_rejects_tampered` written against a committed fixture — needs the fixture signed (see M4 remaining).
 - [x] (2026-07-08) M3: Worker manifest gains a `sig` field pointing at the `.minisig` sidecar via the tia.run download route (empty when absent, which the updater treats as non-installable by design). Code-complete; deploy alongside M4's first signed release.
-- [ ] M4: Ship a signed release, prove the negative (tampered zip rejected) and positive (genuine update installs) end to end, document the key-custody runbook, and address review finding #3 (writable-install-dir warning). Close out. (Immediate remaining sub-step: developer signs `tests/fixtures/signing/sample.bin` once so the ignored verification test can run — command in the test's doc comment.)
+- [~] M4: (completed: fixture signed + ignored verification test passes — genuine verifies, tamper + garbage rejected; key-custody runbook written; finding #3 mitigated via dist-README guidance to install under an admin-only dir + a signed-update-integrity note, pushed as `tia-tools-bot` commit `d419ccf`. Remaining: the live signed-release acceptance — cut the first signed release via `/release`, deploy the Worker `sig`-field change with it, and confirm on a real older→newer update that a genuine build installs and a hand-tampered artifact is rejected. This happens at the next release; then close out + no new ADR needed (0013 already written).)
 
 ## Surprises & Discoveries
 
@@ -37,9 +37,12 @@ You can see it working two ways. Positive: cut a signed release, run an older si
 - Decision: the signing secret key lives as a password-protected file on the developer's machine only, gitignored, with an offline backup; it is never a GitHub Actions secret or a Cloudflare secret.
   Rationale: releases are cut locally by the `/release` skill (there is no CI publishing pipeline), so the key never needs to exist in any shared/automated system — which is the entire point (a shared secret store is exactly the blast-radius this plan removes). The password protects against laptop theft; the offline backup protects against laptop loss (losing the key would force baking a new public key into a future build and re-establishing trust).
   Date/Author: 2026-07-08, security-review follow-up.
-- Decision: fold review findings #2 (updater accepts any `https://` download host) and #3 (writable-install-dir privilege risk) into this plan rather than spinning separate ones; #2 into M2 (same file, `src/update/mod.rs`), #3 into M4 as a startup warning + doc note.
-  Rationale: #2 is a few lines in the exact function M2 already rewrites; batching avoids touching the trust-critical updater twice. #3 is a local-attacker issue, lower severity, and naturally a documentation + one-check addition rather than its own effort.
+- Decision: fold review findings #2 (updater accepts any `https://` download host) and #3 (writable-install-dir privilege risk) into this plan rather than spinning separate ones; #2 into M2 (same file, `src/update/mod.rs`), #3 into M4 as a doc mitigation.
+  Rationale: #2 is a few lines in the exact function M2 already rewrites; batching avoids touching the trust-critical updater twice. #3 is a local-attacker issue, lower severity, and naturally a documentation addition.
   Date/Author: 2026-07-08, security-review follow-up.
+- Decision: finding #3 is mitigated by DOCUMENTATION ONLY (dist README tells users to extract to an admin-only location such as `%ProgramFiles%`), NOT by a programmatic startup ACL check.
+  Rationale: a *correct* "is my directory writable by non-administrators" test requires reading the directory's security descriptor and checking the DACL for write grants to non-admin SIDs (e.g. `Users`, S-1-5-32-545) — substantial `unsafe` Windows-API surface. A naive heuristic (e.g. "warn unless under Program Files") produces false positives/negatives that erode trust in the warning. For a Low-severity local-attacker finding on a portable tool, the disproportion isn't worth it; the extract-location guidance removes the exposure at its source. A programmatic check remains available as future polish if the threat model changes.
+  Date/Author: 2026-07-09, M4 implementation judgement.
 
 ## Outcomes & Retrospective
 
@@ -109,9 +112,27 @@ Behavioral acceptance, in order of importance:
 
 Key generation is one-time; re-running `rsign generate` would create a DIFFERENT key and silently break verification for every shipped binary carrying the old public key — so guard against accidental regeneration (the runbook must say "the key already exists; do not regenerate"). Signing a zip is idempotent (re-running overwrites the same `.minisig`). The updater changes are additive and covered by tests; a bad public key constant is caught immediately by the negative-proof test failing to verify a genuinely-signed zip. If the secret key is ever lost, recovery is: generate a new key, bake the new public key into the next release, and ship it the normal way — users on the last good signed build update into it (that build still verifies the OLD signatures, which is fine because the new release is signed with the new key... — NOTE: this transition needs care; see the runbook to be written in M4, which will specify shipping one release signed by BOTH keys or accepting that pre-transition builds can't auto-update to post-transition ones).
 
+## Key-custody runbook
+
+The signing key is the whole security model; treat it accordingly.
+
+- **Where it lives.** Secret key: `~/.minisign/gakumas.key` (i.e. `%USERPROFILE%\.minisign\gakumas.key`), password-protected, on the developer's machine only. It is NOT in git, the dist repo, Cloudflare, or any CI/secret store — by design, so no network-facing system compromise can reach it. Public key: `RWSsK+YIsZpesxIA/bU6J4wwjBJajq9Ky8UGWyBcbOsb+VBkb2aUlw4Q`, embedded in `src/update/endpoints.rs::PUBLIC_KEY` (safe to publish).
+- **Backup.** Keep at least one offline copy of the secret key file AND its password, stored separately (e.g. an encrypted USB drive + a password manager). Losing the key is a recoverable-but-painful event (see below); losing it with no backup means the current signing identity is gone forever.
+- **Never regenerate over it.** Running `rsign generate` again writes a DIFFERENT key. Do not run it on a machine holding the real key. There is no reason to regenerate unless rotating (below).
+- **Signing a release.** Handled by `/release` step 9a: `rsign sign -s ~/.minisign/gakumas.key -x <zip>.minisig <zip>`, then verify with the embedded public key before publishing. Requires the key password.
+- **If the key is LOST (backup gone):** generate a new keypair, replace `PUBLIC_KEY` in `endpoints.rs`, ship a normal signed release with the new key. Users on any prior signed build update into it via the usual path (their build verifies the OLD key, and the transition release must therefore be signed with the OLD key — see rotation). If no old key exists to sign the transition, users on old builds cannot auto-update and must re-download manually once; new downloads are fine.
+- **If the key is SUSPECTED COMPROMISED (rotation):** (1) generate a new keypair; (2) cut ONE transition release whose zip is signed with the OLD key (so existing builds accept it) but whose embedded `PUBLIC_KEY` is the NEW key; (3) all releases after that are signed with the NEW key only. After the transition ships, revoke/destroy the old secret key. This is the only clean way to move the trust anchor without stranding users — record the transition version here when it happens.
+- **Rotation caveat baked into the code:** a shipped binary can only verify signatures made by the key it carries. Plan any key change as the two-step transition above, never a hard cutover.
+
 ## Artifacts and Notes
 
-- (evidence transcripts to be added as milestones complete)
+- 2026-07-08/09 unit proof: `verify_signature_accepts_genuine_and_rejects_tampered` (ignored) passes — the committed fixture `tests/fixtures/signing/sample.bin`, signed by the real secret key (prehashed minisign format), verifies against the embedded `PUBLIC_KEY`; a one-byte tamper and a garbage signature both fail. This confirms the embedded key matches the signing key with no typo.
+
+      running 1 test
+      test update::install::tests::verify_signature_accepts_genuine_and_rejects_tampered ... ok
+      test result: ok. 1 passed; 0 failed; ...
+
+- 17 updater unit tests pass under `GAKUMAS_NO_MANIFEST=1 cargo test update::`, including missing-signature rejection, off-host-download rejection, and exact-host-match (blocks `github.com.evil.test`).
 
 ## Interfaces and Dependencies
 
