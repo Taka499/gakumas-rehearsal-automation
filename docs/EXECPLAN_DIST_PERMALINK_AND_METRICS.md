@@ -18,7 +18,7 @@ Also today, the developer has zero visibility into usage: no idea how many peopl
 - [x] (2026-07-08) M2: Analytics Engine event recording, deployed and live-verified end-to-end: check + download events landed in `dist_metrics` with correct schema — event type, asset name (blob5), country (JP), daily bucket, and client version (`0.9.0` from a simulated app User-Agent). User enabled Analytics Engine in the dashboard (dataset `dist_metrics`, binding `METRICS`) and set the `CF_ANALYTICS_TOKEN` secret. See Artifacts.
 - [ ] M3: nightly cron rollup into Workers KV. (completed: all code deployed; KV namespace `HISTORY` (id `6bd8c0bf0edc4c22b55624d7eb31c0b0`); cron `30 2 * * *` attached after registering the account's workers.dev subdomain (see Surprises); the exact rollup SQL, token, and response shape verified from the local side — note AE returns numbers as JSON strings, both consumers coerce. Remaining: observe the real cron produce `daily/2026-07-08` after 02:30 UTC on 2026-07-09 — `npx wrangler kv key list --binding HISTORY --remote` from `infra/worker/`, then `python scripts/dist_stats.py` shows the row. A forced run via `wrangler dev --test-scheduled --remote` was a dead end: dev previews don't receive production secrets, so `aggregateDay` skips by design.)
 - [x] (2026-07-08) M4: local stats script `scripts/dist_stats.py` — runs clean; AE + GitHub sections verified with live data (KV section correctly reports "no rollup keys yet" until the first cron). See Artifacts.
-- [ ] M5: disclosure note + docs sync + close-out.
+- [ ] M5: disclosure note + docs sync + close-out. (completed: dist repo README updated via bot PAT — permanent link front-and-center + JA/EN anonymous-metrics privacy section, commit `f6fa456` author verified `tia-tools-bot`; `infra/worker/README.md` metrics/secrets/prereq docs. Remaining: after M3's overnight confirmation — CLAUDE.md snapshot update, retrospective, close-out ritual.)
 
 ## Surprises & Discoveries
 
@@ -62,6 +62,9 @@ Also today, the developer has zero visibility into usage: no idea how many peopl
 - Decision: long-term history is preserved by a nightly cron on the Worker that rolls up per-day aggregates into Workers KV.
   Rationale: Analytics Engine deletes raw events after ~90 days (hard platform limit). The cron+KV rollup is $0 on the Workers free plan (1 small KV write/day vs a 1,000/day limit; cron triggers included free) and survives months of the developer not touching the project, unlike script-side snapshotting. Idempotent: each day's aggregate is written under a date key, so re-runs overwrite harmlessly.
   Date/Author: 2026-07-08, /grill-me session (user decision, after cost check).
+- Decision: the dist repo's privacy disclosure describes the collection but does NOT link `infra/worker/worker.js` as the auditable source (correcting this plan's own M5 wording).
+  Rationale: linking the personal repo from the download page would put the personal identity one click away — exactly what ADR 0011's bot-authored, no-code dist repo exists to prevent. Anyone who independently finds the public repo can still audit the code; the dist repo just doesn't hand out the pointer.
+  Date/Author: 2026-07-08, caught during M5 implementation.
 - Decision: update checks that fall back to the GitHub API (when tia.run is unreachable) go uncounted.
   Rationale: accepted limitation; the fallback exists for resilience (per `src/update/endpoints.rs`) and instrumenting GitHub's API is impossible. Expected to be a negligible fraction.
   Date/Author: 2026-07-08, /grill-me session.

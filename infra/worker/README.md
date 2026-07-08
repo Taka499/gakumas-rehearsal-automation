@@ -30,6 +30,14 @@ The `custom_domain` route in `wrangler.toml` makes Cloudflare attach the Worker 
 
 Before the first release exists on the dist repo, `/latest.json` returns 502 "No release" — expected.
 
+## Anonymous metrics (per docs/adr/0012)
+
+Every `/latest.json` hit records a `check` event and every resolved `/download...` hit a `download` event into the Analytics Engine dataset `dist_metrics` (binding `METRICS`). Dimensions: event type, client app version (parsed from the updater's User-Agent; empty for browsers), country, a daily-rotating salted IP hash (`HASH_SALT` secret; raw IPs never stored), and the asset name for downloads. A nightly cron (`30 2 * * *` UTC) aggregates each finished UTC day into KV (binding `HISTORY`) under `daily/<YYYY-MM-DD>` — permanent history, since Analytics Engine keeps raw events only ~90 days — backfilling up to 7 missed days. Read the numbers with `python scripts/dist_stats.py` from the repo root (token in the repo-root `.env`).
+
+Secrets on this Worker: `HASH_SALT` (random, regenerable at the cost of one day's unique-count continuity) and `CF_ANALYTICS_TOKEN` (API token, Account Analytics: Read — if rollup keys stop appearing, this token has expired; recreate and `npx wrangler secret put CF_ANALYTICS_TOKEN`).
+
+One-time account prerequisites (already done; recorded because both fail deploys confusingly if absent): Analytics Engine must be enabled in the dashboard (error 10089), and the account needs a workers.dev subdomain for cron schedules to attach (error 10063) — ours is `tia-tools-dev.workers.dev`, unused by this Worker.
+
 ## Rate limits
 
 Anonymous GitHub API allows 60 req/hr per egress IP; the 5-minute edge cache keeps usage far below that. If it ever becomes a problem: `npx wrangler secret put GITHUB_TOKEN` with the **bot's** PAT (never a personal one, per ADR-0011).
