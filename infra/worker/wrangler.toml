@@ -10,3 +10,28 @@ compatibility_date = "2026-07-01"
 routes = [
   { pattern = "rehearsal-automation.tia.run", custom_domain = true }
 ]
+
+# Anonymous usage metrics (per docs/adr/0012): events land in this
+# Analytics Engine dataset. Requires the HASH_SALT secret
+# (`wrangler secret put HASH_SALT`) for the daily-rotating IP bucket,
+# and a ONE-TIME dashboard enable of Analytics Engine (deploy error
+# 10089 otherwise): dash.cloudflare.com -> Workers -> Analytics Engine.
+[[analytics_engine_datasets]]
+binding = "METRICS"
+dataset = "dist_metrics"
+
+# Permanent per-day aggregates (AE raw events expire after ~90 days).
+# Written by the nightly cron below; read by scripts/dist_stats.py.
+[[kv_namespaces]]
+binding = "HISTORY"
+id = "6bd8c0bf0edc4c22b55624d7eb31c0b0"
+
+# Nightly rollup at 02:30 UTC (11:30 JST): aggregates yesterday's events
+# into KV, backfilling up to 7 days of missed runs. Needs the
+# CF_ANALYTICS_TOKEN secret (API token with Account Analytics: Read).
+[triggers]
+crons = ["30 2 * * *"]
+
+[vars]
+# Cloudflare account id — not a secret (it appears in dashboard URLs).
+ACCOUNT_ID = "1801ac05a148800acad73c761a1da279"

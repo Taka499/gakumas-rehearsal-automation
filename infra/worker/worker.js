@@ -20,14 +20,17 @@ const CACHE_TTL = 300; // seconds; keeps us far under GitHub's 60 req/hr/IP anon
 const DOMAIN = "rehearsal-automation.tia.run";
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const path = new URL(request.url).pathname;
     try {
-      if (path === "/latest.json") return await latestJson(env);
+      if (path === "/latest.json") {
+        ctx.waitUntil(recordEvent(env, request, "check", ""));
+        return await latestJson(env);
+      }
       if (path === "/download" || path === "/download/")
-        return await download(env, null);
+        return await download(env, request, ctx, null);
       if (path.startsWith("/download/"))
-        return await download(env, decodeURIComponent(path.slice("/download/".length)));
+        return await download(env, request, ctx, decodeURIComponent(path.slice("/download/".length)));
       if (path === "/" || path === "/latest")
         return Response.redirect(`${RELEASES_PAGE}/latest`, 302);
       return new Response("Not found\n", { status: 404 });
@@ -35,7 +38,139 @@ export default {
       return new Response("Upstream error\n", { status: 502 });
     }
   },
+
+  // Nightly (cron in wrangler.toml): preserve per-day aggregates in KV
+  // before Analytics Engine's ~90-day retention discards the raw events.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(rollup(env));
+  },
 };
+
+// ---- Anonymous usage metrics (per docs/adr/0012) ----------------------
+//
+// Event row schema (positions are load-bearing: the rollup cron and
+// scripts/dist_stats.py address these as blob1..blob5 in SQL):
+//   blobs[0] event type: "check" | "download"
+//   blobs[1] client app version parsed from User-Agent, "" for browsers
+//   blobs[2] country code from request.cf.country, "" if absent
+//   blobs[3] daily anonymous bucket (see dailyBucket)
+//   blobs[4] downloaded asset name, "" for checks
+// No raw IP and no persistent identifier is ever written; the bucket
+// rotates because the UTC date is part of the hash input.
+
+async function recordEvent(env, request, type, extra) {
+  try {
+    if (!env.METRICS) return; // binding absent in local dev — never break the user path
+    const ip = request.headers.get("CF-Connecting-IP") || "";
+    const day = new Date().toISOString().slice(0, 10);
+    const bucket = await dailyBucket(ip, day, env.HASH_SALT || "");
+    env.METRICS.writeDataPoint({
+      blobs: [
+        type,
+        parseAppVersion(request.headers.get("User-Agent") || ""),
+        (request.cf && request.cf.country) || "",
+        bucket,
+        extra || "",
+      ],
+      doubles: [1],
+      indexes: [bucket],
+    });
+  } catch (err) {
+    // Metrics are best-effort by design; swallow everything.
+  }
+}
+
+// Truncated SHA-256(ip|utc-date|salt). Irreversible without the salt
+// (a wrangler secret), and a different value every UTC day, so buckets
+// cannot be chained into a cross-day profile.
+async function dailyBucket(ip, day, salt) {
+  const data = new TextEncoder().encode(`${ip}|${day}|${salt}`);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(digest)]
+    .slice(0, 8)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function parseAppVersion(userAgent) {
+  const m = /^gakumas-rehearsal-automation\/(\d+\.\d+\.\d+)/.exec(userAgent);
+  return m ? m[1] : "";
+}
+
+// ---- Nightly rollup: Analytics Engine -> KV ---------------------------
+//
+// Writes one JSON value per UTC day under KV key "daily/<YYYY-MM-DD>":
+//   {date, checks, unique_users, downloads_app, downloads_browser,
+//    versions: {ver: unique users}, countries: {cc: unique users}}
+// Yesterday is always (re)written — idempotent by key. The 6 days before
+// it are backfilled only if missing, so cron outages up to a week
+// self-heal while the raw events still exist in AE.
+
+async function rollup(env) {
+  for (let back = 1; back <= 7; back++) {
+    const day = new Date(Date.now() - back * 86400e3).toISOString().slice(0, 10);
+    const key = `daily/${day}`;
+    if (back > 1 && (await env.HISTORY.get(key)) !== null) continue;
+    const agg = await aggregateDay(env, day);
+    if (agg) await env.HISTORY.put(key, JSON.stringify(agg));
+  }
+}
+
+async function aggregateDay(env, day) {
+  // One grouped query per day; uniques are counted in JS from the
+  // (event, version, country, bucket) combinations, sidestepping any
+  // question of count(DISTINCT ...) support in the AE SQL dialect.
+  // sum(_sample_interval), not count(): correct under AE sampling.
+  const next = new Date(new Date(`${day}T00:00:00Z`).getTime() + 86400e3)
+    .toISOString()
+    .slice(0, 10);
+  const sql =
+    `SELECT blob1 AS event, blob2 AS ver, blob3 AS country, blob4 AS bucket, ` +
+    `sum(_sample_interval) AS n FROM dist_metrics ` +
+    `WHERE timestamp >= toDateTime('${day} 00:00:00') ` +
+    `AND timestamp < toDateTime('${next} 00:00:00') ` +
+    `GROUP BY event, ver, country, bucket FORMAT JSON`;
+  const res = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${env.ACCOUNT_ID}/analytics_engine/sql`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${env.CF_ANALYTICS_TOKEN}` },
+      body: sql,
+    }
+  );
+  if (!res.ok) return null; // token/API trouble: skip, next cron retries via backfill
+  const rows = (await res.json()).data || [];
+
+  let checks = 0;
+  let downloadsApp = 0;
+  let downloadsBrowser = 0;
+  const checkBuckets = new Set();
+  const verBuckets = {};
+  const countryBuckets = {};
+  for (const r of rows) {
+    const n = Number(r.n) || 0;
+    if (r.event === "check") {
+      checks += n;
+      checkBuckets.add(r.bucket);
+      if (r.ver) (verBuckets[r.ver] ||= new Set()).add(r.bucket);
+      (countryBuckets[r.country || "??"] ||= new Set()).add(r.bucket);
+    } else if (r.event === "download") {
+      if (r.ver) downloadsApp += n;
+      else downloadsBrowser += n;
+    }
+  }
+  const sizes = (m) =>
+    Object.fromEntries(Object.entries(m).map(([k, s]) => [k, s.size]));
+  return {
+    date: day,
+    checks,
+    unique_users: checkBuckets.size,
+    downloads_app: downloadsApp,
+    downloads_browser: downloadsBrowser,
+    versions: sizes(verBuckets),
+    countries: sizes(countryBuckets),
+  };
+}
 
 function ghHeaders(env) {
   // GitHub rejects requests without a User-Agent.
@@ -96,7 +231,7 @@ async function latestJson(env) {
   });
 }
 
-async function download(env, name) {
+async function download(env, request, ctx, name) {
   const rel = await getLatestRelease(env);
   if (!rel) return new Response("No release\n", { status: 502 });
   const assets = rel.assets || [];
@@ -106,5 +241,7 @@ async function download(env, name) {
     ? assets.find((a) => a.name === name)
     : assets.find((a) => a.name.endsWith(".zip"));
   if (!asset) return new Response("No such asset\n", { status: 404 });
+  // Recorded only for resolved assets, so 404 probes don't count as downloads.
+  ctx.waitUntil(recordEvent(env, request, "download", asset.name));
   return Response.redirect(asset.browser_download_url, 302);
 }

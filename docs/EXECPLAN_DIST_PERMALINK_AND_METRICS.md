@@ -15,14 +15,17 @@ Also today, the developer has zero visibility into usage: no idea how many peopl
 ## Progress
 
 - [x] (2026-07-08) M1: version-less `/download` route + move the Worker from `tia.run` to `rehearsal-automation.tia.run` (root freed, no alias) + updater endpoint flip in `src/update/endpoints.rs`. Deployed (Worker version dda02ada) and verified live: subdomain `/download` 302s to the v0.9.0 zip, `/latest.json` serves the manifest with subdomain `url`, named-asset 404 unchanged, `cargo check` clean, and bare `tia.run` no longer resolves (DNS record removed on detach). See Artifacts.
-- [ ] M2: Analytics Engine event recording (checks + downloads) with daily-rotating salted IP hash.
-- [ ] M3: nightly cron rollup of daily aggregates into Workers KV (permanent history).
+- [ ] M2: Analytics Engine event recording (checks + downloads) with daily-rotating salted IP hash. (completed: code + `HASH_SALT` secret set; remaining: deploy is blocked until the user enables Analytics Engine once in the dashboard — error 10089, see Surprises — then deploy + generate/verify events.)
+- [ ] M3: nightly cron rollup of daily aggregates into Workers KV (permanent history). (completed: code — `scheduled()` handler, `rollup()`/`aggregateDay()` in `infra/worker/worker.js`, KV namespace `HISTORY` created (id `6bd8c0bf0edc4c22b55624d7eb31c0b0`), cron `30 2 * * *`, `ACCOUNT_ID` var; remaining: user creates the `CF_ANALYTICS_TOKEN` API token, `wrangler secret put` it, deploy, force a scheduled run, confirm the KV key.)
 - [ ] M4: local stats script `scripts/dist_stats.py`.
 - [ ] M5: disclosure note + docs sync + close-out.
 
 ## Surprises & Discoveries
 
-- (none yet)
+- Observation: Analytics Engine must be enabled once, manually, in the Cloudflare dashboard before any Worker with an `analytics_engine_datasets` binding can deploy; wrangler cannot do it.
+  Evidence: `npx wrangler deploy` failed with `[ERROR] ... You need to enable Analytics Engine. Head to the Cloudflare Dashboard to enable: https://dash.cloudflare.com/<account>/workers/analytics-engine [code: 10089]` (2026-07-08, first M2 deploy attempt).
+- Observation: the sandboxed agent shell cannot run `curl` (permission-denied), so live HTTP verification goes through the harness WebFetch tool instead; `npx wrangler` commands work fine.
+  Evidence: M1 verification transcript in Artifacts.
 
 ## Decision Log
 
