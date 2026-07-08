@@ -1,4 +1,7 @@
-// Distribution front for tia.run (per docs/adr/0011).
+// Distribution front for rehearsal-automation.tia.run (per docs/adr/0011).
+// Per-app subdomain: each future tia-tools app gets its own single-level
+// subdomain; the bare tia.run is intentionally unbound (reserved for a
+// brand landing page someday).
 //
 // Stateless: everything is derived on the fly from the dist repo's
 // GitHub Releases API, edge-cached for CACHE_TTL seconds, so publishing a
@@ -6,20 +9,23 @@
 //
 // Routes:
 //   GET /latest.json       -> update manifest {version, notes, url, sha256}
-//   GET /download/<asset>  -> 302 to the GitHub release asset
+//   GET /download          -> 302 to the latest release's zip (permanent share link)
+//   GET /download/<asset>  -> 302 to that GitHub release asset
 //   GET / or /latest       -> 302 to the dist repo's latest-release page
 
 const REPO = "tia-tools/releases";
 const RELEASES_PAGE = `https://github.com/${REPO}/releases`;
 const API_LATEST = `https://api.github.com/repos/${REPO}/releases/latest`;
 const CACHE_TTL = 300; // seconds; keeps us far under GitHub's 60 req/hr/IP anon limit
-const DOMAIN = "tia.run";
+const DOMAIN = "rehearsal-automation.tia.run";
 
 export default {
   async fetch(request, env) {
     const path = new URL(request.url).pathname;
     try {
       if (path === "/latest.json") return await latestJson(env);
+      if (path === "/download" || path === "/download/")
+        return await download(env, null);
       if (path.startsWith("/download/"))
         return await download(env, decodeURIComponent(path.slice("/download/".length)));
       if (path === "/" || path === "/latest")
@@ -93,7 +99,12 @@ async function latestJson(env) {
 async function download(env, name) {
   const rel = await getLatestRelease(env);
   if (!rel) return new Response("No release\n", { status: 502 });
-  const asset = (rel.assets || []).find((a) => a.name === name);
+  const assets = rel.assets || [];
+  // No name = the permanent link: whatever zip the latest release carries
+  // (same selection rule as latestJson).
+  const asset = name
+    ? assets.find((a) => a.name === name)
+    : assets.find((a) => a.name.endsWith(".zip"));
   if (!asset) return new Response("No such asset\n", { status: 404 });
   return Response.redirect(asset.browser_download_url, 302);
 }

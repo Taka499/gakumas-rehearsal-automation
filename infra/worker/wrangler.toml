@@ -2,9 +2,11 @@ name = "tia-run-dist"
 main = "worker.js"
 compatibility_date = "2026-07-01"
 
-# Custom domain: Cloudflare creates/manages the DNS record for tia.run
-# automatically when this deploys (the zone must exist in the same account,
-# which it does — the domain is registered there).
+# Custom domain: Cloudflare creates/manages the DNS record automatically
+# when this deploys (the zone must exist in the same account, which it
+# does — the domain is registered there). Per-app subdomain; the bare
+# tia.run is intentionally unbound. Second-level subdomains (dl.x.tia.run)
+# would NOT be covered by the zone's free Universal SSL — don't add them.
 routes = [
-  { pattern = "tia.run", custom_domain = true }
+  { pattern = "rehearsal-automation.tia.run", custom_domain = true }
 ]
