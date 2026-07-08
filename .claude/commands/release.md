@@ -50,6 +50,8 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
 
    Keep the notes focused on what the user can now do, in a neutral voice (no personal links or signatures — the dist repo is the identity-separated channel). Get the user's OK on the draft.
 
+   IMPORTANT — first-paragraph convention: the Worker's manifest `notes` field (shown in the in-app "update available" prompt) is only the FIRST paragraph of the body, split on the first blank line. So the body MUST open with a one-line plain-text summary, then a blank line, then the `## Changes`/section detail. If you start with a `## Heading` followed by a blank line, the in-app prompt shows just that bare heading. Lead with a sentence, not a header.
+
 6. **Build and package** (assembles `release/gakumas-rehearsal-automation/`):
 
        powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
@@ -70,8 +72,10 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
 9a. **Sign the zip** (mandatory — the updater rejects unsigned or mismatched downloads). Prompts for the key password; the developer must run this, not an agent shell:
 
        rsign sign -s "$HOME/.minisign/gakumas.key" -x gakumas-rehearsal-automation-vX.Y.Z.zip.minisig gakumas-rehearsal-automation-vX.Y.Z.zip
-       # verify against the PUBLIC key embedded in the binary before publishing:
-       rsign verify -P "$(grep -oP 'RW\S+' src/update/endpoints.rs | head -1)" -x gakumas-rehearsal-automation-vX.Y.Z.zip.minisig gakumas-rehearsal-automation-vX.Y.Z.zip
+       # verify against the PUBLIC key embedded in the binary before publishing.
+       # Extract ONLY the base64 between the quotes (a bare `RW\S+` grabs the
+       # trailing `";` and fails base64 decode):
+       rsign verify -P "$(grep -oP '"\KRW[^"]+' src/update/endpoints.rs | head -1)" -x gakumas-rehearsal-automation-vX.Y.Z.zip.minisig gakumas-rehearsal-automation-vX.Y.Z.zip
        # -> "Signature and comment signature verified"
 
 10. **Privacy scrub.** The artifacts must contain no identifying strings. Expect `0` from both (any hit → STOP and investigate before publishing):
