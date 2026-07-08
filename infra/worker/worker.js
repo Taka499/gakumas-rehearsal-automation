@@ -217,11 +217,21 @@ async function latestJson(env) {
     }
   }
 
+  // Release signature (docs/EXECPLAN_RELEASE_SIGNING.md): point at the
+  // .minisig sidecar the /release flow uploads next to the zip, served through
+  // our own domain so it shares the zip's host (and passes the updater's host
+  // allowlist). Empty when a release predates signing — the signing-aware
+  // updater then refuses to install it, which is the intended safe behaviour.
+  const sig = assets.find((a) => a.name === `${zip.name}.minisig`)
+    ? `https://${DOMAIN}/download/${encodeURIComponent(zip.name)}.minisig`
+    : "";
+
   const manifest = {
     version: (rel.tag_name || "").replace(/^v/, ""),
     notes: (rel.body || "").split(/\r?\n\r?\n/)[0].trim(),
     url: `https://${DOMAIN}/download/${encodeURIComponent(zip.name)}`,
     sha256: sha256.toLowerCase(),
+    sig,
   };
   return new Response(JSON.stringify(manifest, null, 2) + "\n", {
     headers: {

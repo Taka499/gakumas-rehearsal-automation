@@ -10,7 +10,8 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
 - **The release version is the git tag.** The tag `vX.Y.Z` is pushed to THIS repo (source of truth for version history) and the release of the same tag is created on `tia-tools/releases`. Find the latest with `git tag --sort=-v:refname | head -5` and `gh release list -R tia-tools/releases -L 5` (the dist repo only has releases from v0.9-era onward; older ones live on the personal repo). Keep `Cargo.toml`'s `version` in sync: bump it to the release version and commit before tagging.
 - **Version bump convention:** new user-facing feature(s) → minor bump (`v0.X.0`); bug fix / small change → patch bump (`v0.X.Y`). This mirrors the existing history (v0.2.0, v0.3.0 were feature releases; v0.3.1–v0.3.3 were fixes).
 - **`scripts/package-release.ps1`** builds the optimized binary and assembles `release/gakumas-rehearsal-automation/` (exe + config.json + resources/). It does not zip and does not take a version.
-- **The release asset is a zip** named `gakumas-rehearsal-automation-vX.Y.Z.zip` whose top-level folder is `gakumas-rehearsal-automation/` (matches every prior release), accompanied by a `.sha256` sidecar (consumed by the in-app updater for download verification).
+- **The release asset is a zip** named `gakumas-rehearsal-automation-vX.Y.Z.zip` whose top-level folder is `gakumas-rehearsal-automation/` (matches every prior release), accompanied by a `.sha256` sidecar AND a `.minisig` signature sidecar (both consumed by the in-app updater; the signature is mandatory — an unsigned release will NOT auto-install on current clients).
+- **Releases are cryptographically signed (per `docs/EXECPLAN_RELEASE_SIGNING.md` / `docs/adr/0013`).** The zip is signed with the developer's minisign secret key at `~/.minisign/gakumas.key` (password-protected, never in git/dist-repo/Cloudflare); the matching public key is baked into the binary (`src/update/endpoints.rs::PUBLIC_KEY`). This is the trust anchor: a compromised dist repo or Cloudflare account still cannot push malware the updater will accept. Signing needs the `rsign` tool (`cargo install rsign2`) and the key password. NEVER regenerate the key (it would break verification for every shipped binary).
 - **The binary requires administrator elevation** (Windows manifest) to run, because `SendInput` must drive an elevated game process.
 - Git on Windows prints `LF will be replaced by CRLF` warnings — these are noise, not errors.
 
@@ -66,6 +67,13 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
        sha256sum gakumas-rehearsal-automation-vX.Y.Z.zip | awk '{print $1}' > gakumas-rehearsal-automation-vX.Y.Z.zip.sha256
        cat gakumas-rehearsal-automation-vX.Y.Z.zip.sha256   # 64 hex chars
 
+9a. **Sign the zip** (mandatory — the updater rejects unsigned or mismatched downloads). Prompts for the key password; the developer must run this, not an agent shell:
+
+       rsign sign -s "$HOME/.minisign/gakumas.key" -x gakumas-rehearsal-automation-vX.Y.Z.zip.minisig gakumas-rehearsal-automation-vX.Y.Z.zip
+       # verify against the PUBLIC key embedded in the binary before publishing:
+       rsign verify -P "$(grep -oP 'RW\S+' src/update/endpoints.rs | head -1)" -x gakumas-rehearsal-automation-vX.Y.Z.zip.minisig gakumas-rehearsal-automation-vX.Y.Z.zip
+       # -> "Signature and comment signature verified"
+
 10. **Privacy scrub.** The artifacts must contain no identifying strings. Expect `0` from both (any hit → STOP and investigate before publishing):
 
         grep -ac "takatomo\|Taka499" release/gakumas-rehearsal-automation/gakumas-rehearsal-automation.exe || echo 0
@@ -81,6 +89,7 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
         GH_TOKEN="$GAKUMAS_DIST_TOKEN" gh release create vX.Y.Z \
           gakumas-rehearsal-automation-vX.Y.Z.zip \
           gakumas-rehearsal-automation-vX.Y.Z.zip.sha256 \
+          gakumas-rehearsal-automation-vX.Y.Z.zip.minisig \
           -R tia-tools/releases \
           --title "vX.Y.Z - <short theme>" \
           --notes-file /tmp/release-notes-vX.Y.Z.md

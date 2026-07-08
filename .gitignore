@@ -19,3 +19,13 @@ __pycache__/
 
 # Cloudflare Worker local artifacts (infra/worker)
 .wrangler/
+
+# Release signing keys (per docs/EXECPLAN_RELEASE_SIGNING.md). The minisign
+# SECRET key must never be committed; the canonical copy lives outside the
+# repo (~/.minisign/gakumas.key). These patterns are defence-in-depth in case
+# a key file is ever generated inside the tree. The PUBLIC key is safe (it is
+# embedded in src/update/endpoints.rs), but we don't track it as a file.
+*.key
+*.minisign.pub
+gakumas-minisign.pub
+minisign.key

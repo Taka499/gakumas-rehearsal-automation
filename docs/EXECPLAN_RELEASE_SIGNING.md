@@ -14,10 +14,10 @@ You can see it working two ways. Positive: cut a signed release, run an older si
 
 ## Progress
 
-- [ ] M1: Generate the signing keypair; teach the release pipeline (`scripts/package-release.ps1` + `.claude/commands/release.md`) to emit a `.minisig` signature sidecar next to the zip and `.sha256`.
-- [ ] M2: Embed the public key and enforce signature verification in the updater (`src/update/`), on BOTH the Worker-manifest and GitHub-fallback paths, before the existing hash check. Fold in the host allowlist (review finding #2).
-- [ ] M3: Add a `sig` field to the Worker manifest (`infra/worker/worker.js`) so the updater can locate the signature, mirroring how `sha256` is already surfaced.
-- [ ] M4: Ship a signed release, prove the negative (tampered zip rejected) and positive (genuine update installs) end to end, document the key-custody runbook, and address review finding #3 (writable-install-dir warning). Close out.
+- [x] (2026-07-08) M1: keypair generated (`~/.minisign/gakumas.key`, password-protected, offline-backed; public key `RWSsK+YIsZpesxIA/...` recorded); `.claude/commands/release.md` gained step 9a (sign) + `.minisig` in the upload list + background facts. `.gitignore` hardened against committing key files. (Signing stays in the skill, not `package-release.ps1`, as planned.)
+- [x] (2026-07-08) M2: `PUBLIC_KEY` + `ALLOWED_DOWNLOAD_HOSTS` in `endpoints.rs`; `UpdateInfo.sig_url`; `parse_manifest`/`parse_github_release` surface the signature on both paths; `validated()` now requires a signature and an allowlisted download host (finding #2); `install.rs` verifies the signature with the embedded key BEFORE the hash, before extract/swap. 17 updater unit tests pass (incl. new missing-signature, off-host, and exact-host-match rejections). `#[ignore]`d `verify_signature_accepts_genuine_and_rejects_tampered` written against a committed fixture — needs the fixture signed (see M4 remaining).
+- [x] (2026-07-08) M3: Worker manifest gains a `sig` field pointing at the `.minisig` sidecar via the tia.run download route (empty when absent, which the updater treats as non-installable by design). Code-complete; deploy alongside M4's first signed release.
+- [ ] M4: Ship a signed release, prove the negative (tampered zip rejected) and positive (genuine update installs) end to end, document the key-custody runbook, and address review finding #3 (writable-install-dir warning). Close out. (Immediate remaining sub-step: developer signs `tests/fixtures/signing/sample.bin` once so the ignored verification test can run — command in the test's doc comment.)
 
 ## Surprises & Discoveries
 

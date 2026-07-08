@@ -15,8 +15,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
+use minisign_verify::{PublicKey, Signature};
 use sha2::{Digest, Sha256};
 
+use super::endpoints::PUBLIC_KEY;
 use super::UpdateInfo;
 
 /// Top-level folder inside the release zip, fixed by `scripts/package-release.ps1`
@@ -43,6 +45,17 @@ pub fn download_and_install(info: &UpdateInfo) -> Result<()> {
     crate::log(&format!("[update] downloading {}", info.url));
     let mut zip_file = download_to_temp(&info.url, &exe_dir)?;
 
+    // Authenticity FIRST: verify the release signature with the embedded public
+    // key before anything else. This is the trust anchor — a compromised dist
+    // repo or Cloudflare account can serve any bytes + matching hash, but cannot
+    // forge a signature for this key. Reject before hashing/extracting/swapping.
+    let sig_text = download_signature(&info.sig_url)?;
+    let zip_bytes = read_all(zip_file.as_file_mut()).context("reading download")?;
+    verify_signature(&zip_bytes, &sig_text).context("署名を確認できません")?;
+    crate::log("[update] signature verified");
+
+    // Integrity: the hash is now defence-in-depth (corruption / truncation),
+    // with a distinct error message from the signature failure above.
     let actual = sha256_hex(zip_file.as_file_mut()).context("hashing download")?;
     if !actual.eq_ignore_ascii_case(&info.sha256) {
         bail!(
@@ -111,6 +124,49 @@ fn download_to_temp(url: &str, dir: &Path) -> Result<tempfile::NamedTempFile> {
     resp.copy_to(&mut file.as_file_mut())?;
     file.as_file_mut().flush()?;
     Ok(file)
+}
+
+/// Fetches the `.minisig` signature text. Small file, short timeout. A missing
+/// or unreachable signature is a hard failure: no signature, no install.
+fn download_signature(sig_url: &str) -> Result<String> {
+    if sig_url.is_empty() {
+        bail!("署名ファイルがありません (no signature URL in manifest)");
+    }
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .user_agent(concat!(
+            "gakumas-rehearsal-automation/",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .build()?;
+    let text = client.get(sig_url).send()?.error_for_status()?.text()?;
+    Ok(text)
+}
+
+/// Reads the reader's full contents into memory (rewinds first). The release
+/// zip is tens of MB — acceptable to hold in RAM for signature verification.
+fn read_all<R: Read + Seek>(reader: &mut R) -> Result<Vec<u8>> {
+    reader.seek(SeekFrom::Start(0))?;
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+/// Verifies `zip_bytes` against `sig_text` (the `.minisig` file contents) using
+/// the embedded [`PUBLIC_KEY`]. Returns an error if the key or signature won't
+/// parse, or if the signature does not match — the caller must treat any error
+/// as "do not install". `allow_legacy = true` accepts both prehashed and legacy
+/// minisign signature formats, so it works regardless of how the release was
+/// signed.
+fn verify_signature(zip_bytes: &[u8], sig_text: &str) -> Result<()> {
+    let public_key =
+        PublicKey::from_base64(PUBLIC_KEY).map_err(|e| anyhow!("bad embedded public key: {e}"))?;
+    let signature =
+        Signature::decode(sig_text).map_err(|e| anyhow!("bad signature file: {e}"))?;
+    public_key
+        .verify(zip_bytes, &signature, true)
+        .map_err(|e| anyhow!("signature mismatch: {e}"))
 }
 
 /// Lowercase hex SHA-256 of the reader's full contents (rewinds first).
@@ -354,5 +410,40 @@ mod tests {
             "RUNNING OLD"
         );
         assert!(!new.exists());
+    }
+
+    /// The core security property: a real signature over the fixture, made with
+    /// the developer's secret key, verifies against the PUBLIC_KEY baked into
+    /// the binary — and a single flipped byte makes verification fail. This
+    /// ties the embedded key to the actual signing key (catches a wrong/typo'd
+    /// PUBLIC_KEY) and proves tamper rejection.
+    ///
+    /// Ignored because it needs the committed signature fixture
+    /// `tests/fixtures/signing/sample.bin.minisig`, produced once by:
+    ///   rsign sign -s ~/.minisign/gakumas.key \
+    ///     -x tests/fixtures/signing/sample.bin.minisig \
+    ///        tests/fixtures/signing/sample.bin
+    /// Run with: GAKUMAS_NO_MANIFEST=1 cargo test verify_signature_ -- --ignored
+    #[test]
+    #[ignore]
+    fn verify_signature_accepts_genuine_and_rejects_tampered() {
+        let base = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/signing");
+        let data = std::fs::read(format!("{base}/sample.bin")).expect("fixture bin");
+        let sig = std::fs::read_to_string(format!("{base}/sample.bin.minisig"))
+            .expect("fixture minisig — sign it first (see doc comment)");
+
+        // Genuine content verifies.
+        verify_signature(&data, &sig).expect("genuine signature must verify");
+
+        // One flipped byte must fail.
+        let mut tampered = data.clone();
+        tampered[0] ^= 0x01;
+        assert!(
+            verify_signature(&tampered, &sig).is_err(),
+            "tampered content must be rejected"
+        );
+
+        // A signature the embedded key didn't make must fail (garbage sig).
+        assert!(verify_signature(&data, "untrusted comment: x\nRWQnonsense\n").is_err());
     }
 }

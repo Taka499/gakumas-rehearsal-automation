@@ -2,3 +2,7 @@ resources/*.zip filter=lfs diff=lfs merge=lfs -text
 resources/guide/*.png filter=lfs diff=lfs merge=lfs -text
 tests/fixtures/overlap_samples/*.png filter=lfs diff=lfs merge=lfs -text
 tests/fixtures/score_retry_samples/*.png filter=lfs diff=lfs merge=lfs -text
+
+# Release-signing fixtures: bytes must be frozen (a signature is over exact
+# bytes; any CRLF/LF rewrite would break verification). Treat as binary.
+tests/fixtures/signing/* -text

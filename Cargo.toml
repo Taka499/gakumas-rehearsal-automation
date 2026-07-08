@@ -43,6 +43,9 @@ plotters = "0.3"
 
 # Auto-update (docs/EXECPLAN_AUTO_UPDATE_DISTRIBUTION.md)
 sha2 = "0.10"
+# Release-signature verification (docs/EXECPLAN_RELEASE_SIGNING.md). Verify-only,
+# pure Rust, no libsodium. The dev signs with the rsign2 CLI (not a dependency).
+minisign-verify = "0.2"
 
 # GUI (Phase 5)
 eframe = "0.29"

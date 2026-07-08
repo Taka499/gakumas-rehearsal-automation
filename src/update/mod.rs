@@ -12,7 +12,7 @@ pub mod install;
 
 use std::time::Duration;
 
-use endpoints::{FALLBACK_API_URL, MANIFEST_URL};
+use endpoints::{ALLOWED_DOWNLOAD_HOSTS, FALLBACK_API_URL, MANIFEST_URL};
 
 /// A downloadable newer release, as described by the update channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +25,11 @@ pub struct UpdateInfo {
     pub url: String,
     /// Lowercase hex SHA-256 of the zip; installation verifies against this.
     pub sha256: String,
+    /// Download URL of the zip's `.minisig` signature. Installation verifies
+    /// the zip against this signature with the embedded public key BEFORE the
+    /// hash check; an empty/missing value makes the install fail (a signature
+    /// is mandatory — see docs/EXECPLAN_RELEASE_SIGNING.md).
+    pub sig_url: String,
 }
 
 /// Returns a strictly newer release than the running binary, or `None`
@@ -117,6 +122,7 @@ fn parse_manifest(text: &str) -> Option<UpdateInfo> {
         notes: v["notes"].as_str().unwrap_or("").to_string(),
         url: v["url"].as_str()?.to_string(),
         sha256: v["sha256"].as_str().unwrap_or("").to_lowercase(),
+        sig_url: v["sig"].as_str().unwrap_or("").to_string(),
     })
 }
 
@@ -147,8 +153,19 @@ fn parse_github_release(text: &str) -> Option<(UpdateInfo, Option<String>)> {
         .and_then(|a| a["browser_download_url"].as_str())
         .map(String::from);
 
+    let sig_name = format!("{zip_name}.minisig");
+    let sig_url = assets
+        .iter()
+        .find(|a| a["name"].as_str() == Some(sig_name.as_str()))
+        .and_then(|a| a["browser_download_url"].as_str())
+        .unwrap_or("")
+        .to_string();
+
     let notes = first_paragraph(v["body"].as_str().unwrap_or(""));
-    Some((UpdateInfo { version, notes, url, sha256 }, sidecar_url))
+    Some((
+        UpdateInfo { version, notes, url, sha256, sig_url },
+        sidecar_url,
+    ))
 }
 
 fn first_paragraph(body: &str) -> String {
@@ -167,8 +184,28 @@ fn is_valid_sha256(s: &str) -> bool {
 fn validated(info: UpdateInfo) -> Option<UpdateInfo> {
     (parse_version(&info.version).is_some()
         && info.url.starts_with("https://")
-        && is_valid_sha256(&info.sha256))
+        && is_allowed_download_host(&info.url)
+        && is_valid_sha256(&info.sha256)
+        && info.sig_url.starts_with("https://")
+        && is_allowed_download_host(&info.sig_url))
     .then_some(info)
+}
+
+/// `true` iff `url`'s host is on the download allowlist (security review
+/// finding #2): a rogue manifest cannot point the download at an
+/// attacker-controlled origin. Host match is exact (no suffix trickery like
+/// `github.com.evil.test`).
+fn is_allowed_download_host(url: &str) -> bool {
+    // Extract the host: strip scheme, then take up to the first '/', ':', '?'.
+    let after_scheme = match url.split_once("://") {
+        Some((_, rest)) => rest,
+        None => return false,
+    };
+    let host = after_scheme
+        .split(['/', ':', '?', '#'])
+        .next()
+        .unwrap_or("");
+    ALLOWED_DOWNLOAD_HOSTS.contains(&host)
 }
 
 #[cfg(test)]
@@ -202,14 +239,18 @@ mod tests {
         assert!(!is_newer("", ""));
     }
 
+    // A well-formed manifest URL on an allowlisted host, reused across tests.
+    const HOST: &str = "https://rehearsal-automation.tia.run/download";
+
     #[test]
     fn parse_manifest_happy_path() {
         let json = format!(
             r#"{{
               "version": "0.9.0",
               "notes": "box plot copy + review fixes",
-              "url": "https://tia.run/download/gakumas-rehearsal-automation-v0.9.0.zip",
-              "sha256": "{SHA}"
+              "url": "{HOST}/gakumas-rehearsal-automation-v0.9.0.zip",
+              "sha256": "{SHA}",
+              "sig": "{HOST}/gakumas-rehearsal-automation-v0.9.0.zip.minisig"
             }}"#
         );
         let info = parse_manifest(&json).expect("valid manifest");
@@ -217,12 +258,13 @@ mod tests {
         assert_eq!(info.notes, "box plot copy + review fixes");
         assert!(info.url.ends_with("v0.9.0.zip"));
         assert_eq!(info.sha256, SHA);
+        assert!(info.sig_url.ends_with(".minisig"));
     }
 
     #[test]
     fn parse_manifest_tolerates_leading_v_and_uppercase_sha() {
         let json = format!(
-            r#"{{"version":"v0.9.1","notes":"","url":"https://tia.run/download/a.zip","sha256":"{}"}}"#,
+            r#"{{"version":"v0.9.1","notes":"","url":"{HOST}/a.zip","sha256":"{}","sig":"{HOST}/a.zip.minisig"}}"#,
             SHA.to_uppercase()
         );
         let info = parse_manifest(&json).expect("valid manifest");
@@ -235,12 +277,42 @@ mod tests {
         assert!(parse_manifest("not json").is_none());
         assert!(parse_manifest(r#"{"version":"0.9.0"}"#).is_none()); // no url/sha
         let bad_sha =
-            r#"{"version":"0.9.0","url":"https://tia.run/download/a.zip","sha256":"abc"}"#;
-        assert!(parse_manifest(bad_sha).is_none());
+            format!(r#"{{"version":"0.9.0","url":"{HOST}/a.zip","sha256":"abc","sig":"{HOST}/a.zip.minisig"}}"#);
+        assert!(parse_manifest(&bad_sha).is_none());
         let http_url = format!(
-            r#"{{"version":"0.9.0","url":"http://tia.run/download/a.zip","sha256":"{SHA}"}}"#
+            r#"{{"version":"0.9.0","url":"http://rehearsal-automation.tia.run/download/a.zip","sha256":"{SHA}","sig":"{HOST}/a.zip.minisig"}}"#
         );
         assert!(parse_manifest(&http_url).is_none()); // https only
+    }
+
+    #[test]
+    fn parse_manifest_rejects_missing_signature() {
+        // Everything valid except the signature is absent -> not installable.
+        let json = format!(
+            r#"{{"version":"0.9.0","url":"{HOST}/a.zip","sha256":"{SHA}"}}"#
+        );
+        assert!(parse_manifest(&json).is_none());
+    }
+
+    #[test]
+    fn parse_manifest_rejects_offhost_download_url() {
+        // A rogue manifest pointing the download at an attacker origin, with a
+        // matching hash and a signature URL, is still rejected (finding #2).
+        let json = format!(
+            r#"{{"version":"0.9.0","url":"https://evil.test/a.zip","sha256":"{SHA}","sig":"{HOST}/a.zip.minisig"}}"#
+        );
+        assert!(parse_manifest(&json).is_none());
+    }
+
+    #[test]
+    fn host_allowlist_is_exact_not_suffix() {
+        assert!(is_allowed_download_host("https://github.com/x/y.zip"));
+        assert!(is_allowed_download_host(
+            "https://rehearsal-automation.tia.run/download/a.zip"
+        ));
+        assert!(!is_allowed_download_host("https://github.com.evil.test/a.zip"));
+        assert!(!is_allowed_download_host("https://evil.test/a.zip"));
+        assert!(!is_allowed_download_host("not-a-url"));
     }
 
     fn github_fixture(digest: &str, with_sidecar: bool) -> String {
@@ -249,11 +321,16 @@ mod tests {
         } else {
             format!(r#""digest": "sha256:{digest}","#)
         };
+        // Always include the .minisig asset (a signature is mandatory); the
+        // `with_sidecar` flag governs only the .sha256 sidecar as before.
         let sidecar = if with_sidecar {
             r#",{"name": "gakumas-rehearsal-automation-v0.9.0.zip.sha256",
-                "browser_download_url": "https://github.com/tia-tools/releases/releases/download/v0.9.0/gakumas-rehearsal-automation-v0.9.0.zip.sha256"}"#
+                "browser_download_url": "https://github.com/tia-tools/releases/releases/download/v0.9.0/gakumas-rehearsal-automation-v0.9.0.zip.sha256"},
+              {"name": "gakumas-rehearsal-automation-v0.9.0.zip.minisig",
+                "browser_download_url": "https://github.com/tia-tools/releases/releases/download/v0.9.0/gakumas-rehearsal-automation-v0.9.0.zip.minisig"}"#
         } else {
-            ""
+            r#",{"name": "gakumas-rehearsal-automation-v0.9.0.zip.minisig",
+                "browser_download_url": "https://github.com/tia-tools/releases/releases/download/v0.9.0/gakumas-rehearsal-automation-v0.9.0.zip.minisig"}"#
         };
         // r### delimiter: the body value contains `"#` (a quote followed by a
         // markdown heading), which would terminate an r#-delimited raw string.
@@ -278,6 +355,7 @@ mod tests {
         assert_eq!(info.sha256, SHA);
         assert!(info.url.ends_with("v0.9.0.zip"));
         assert_eq!(info.notes, "## New Features\n### one-click updates");
+        assert!(info.sig_url.ends_with(".zip.minisig"));
         assert!(sidecar.is_some());
         assert!(validated(info).is_some());
     }
