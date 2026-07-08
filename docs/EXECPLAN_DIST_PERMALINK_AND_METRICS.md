@@ -15,9 +15,9 @@ Also today, the developer has zero visibility into usage: no idea how many peopl
 ## Progress
 
 - [x] (2026-07-08) M1: version-less `/download` route + move the Worker from `tia.run` to `rehearsal-automation.tia.run` (root freed, no alias) + updater endpoint flip in `src/update/endpoints.rs`. Deployed (Worker version dda02ada) and verified live: subdomain `/download` 302s to the v0.9.0 zip, `/latest.json` serves the manifest with subdomain `url`, named-asset 404 unchanged, `cargo check` clean, and bare `tia.run` no longer resolves (DNS record removed on detach). See Artifacts.
-- [ ] M2: Analytics Engine event recording (checks + downloads) with daily-rotating salted IP hash. (completed: code + `HASH_SALT` secret set; remaining: deploy is blocked until the user enables Analytics Engine once in the dashboard — error 10089, see Surprises — then deploy + generate/verify events.)
-- [ ] M3: nightly cron rollup of daily aggregates into Workers KV (permanent history). (completed: code — `scheduled()` handler, `rollup()`/`aggregateDay()` in `infra/worker/worker.js`, KV namespace `HISTORY` created (id `6bd8c0bf0edc4c22b55624d7eb31c0b0`), cron `30 2 * * *`, `ACCOUNT_ID` var; remaining: user creates the `CF_ANALYTICS_TOKEN` API token, `wrangler secret put` it, deploy, force a scheduled run, confirm the KV key.)
-- [ ] M4: local stats script `scripts/dist_stats.py`.
+- [x] (2026-07-08) M2: Analytics Engine event recording, deployed and live-verified end-to-end: check + download events landed in `dist_metrics` with correct schema — event type, asset name (blob5), country (JP), daily bucket, and client version (`0.9.0` from a simulated app User-Agent). User enabled Analytics Engine in the dashboard (dataset `dist_metrics`, binding `METRICS`) and set the `CF_ANALYTICS_TOKEN` secret. See Artifacts.
+- [ ] M3: nightly cron rollup into Workers KV. (completed: all code deployed; KV namespace `HISTORY` (id `6bd8c0bf0edc4c22b55624d7eb31c0b0`); cron `30 2 * * *` attached after registering the account's workers.dev subdomain (see Surprises); the exact rollup SQL, token, and response shape verified from the local side — note AE returns numbers as JSON strings, both consumers coerce. Remaining: observe the real cron produce `daily/2026-07-08` after 02:30 UTC on 2026-07-09 — `npx wrangler kv key list --binding HISTORY --remote` from `infra/worker/`, then `python scripts/dist_stats.py` shows the row. A forced run via `wrangler dev --test-scheduled --remote` was a dead end: dev previews don't receive production secrets, so `aggregateDay` skips by design.)
+- [x] (2026-07-08) M4: local stats script `scripts/dist_stats.py` — runs clean; AE + GitHub sections verified with live data (KV section correctly reports "no rollup keys yet" until the first cron). See Artifacts.
 - [ ] M5: disclosure note + docs sync + close-out.
 
 ## Surprises & Discoveries
@@ -26,6 +26,12 @@ Also today, the developer has zero visibility into usage: no idea how many peopl
   Evidence: `npx wrangler deploy` failed with `[ERROR] ... You need to enable Analytics Engine. Head to the Cloudflare Dashboard to enable: https://dash.cloudflare.com/<account>/workers/analytics-engine [code: 10089]` (2026-07-08, first M2 deploy attempt).
 - Observation: the sandboxed agent shell cannot run `curl` (permission-denied), so live HTTP verification goes through the harness WebFetch tool instead; `npx wrangler` commands work fine.
   Evidence: M1 verification transcript in Artifacts.
+- Observation: attaching a cron trigger requires the account to have a workers.dev subdomain, even though this Worker never uses one (custom-domain-only). Error code 10063 on the `/schedules` API. Fixed by the user opening the Workers dashboard landing page, which auto-registered `tia-tools-dev.workers.dev` — a neutral name, so no identity concern.
+  Evidence: `wrangler triggers deploy` 403 with `{"code":10063,"message":"You need a workers.dev subdomain..."}`; succeeded immediately after registration (`schedule: 30 2 * * *`).
+- Observation: `wrangler dev --test-scheduled --remote` CANNOT verify the rollup: dev preview sessions do not receive production secrets, so `env.CF_ANALYTICS_TOKEN` is undefined and `aggregateDay` returns null by design (its `!res.ok` guard). The scheduled handler must be proven by the real production cron.
+  Evidence: forced `__scheduled` run returned "Ran scheduled event" but `wrangler kv key list` stayed `[]`.
+- Observation: the AE SQL API returns numeric aggregates as JSON *strings* (`"n": "1"`), not numbers.
+  Evidence: ad-hoc query transcript in Artifacts; both `aggregateDay` (`Number(r.n)`) and `dist_stats.py` (`float(r["n"])`) coerce.
 
 ## Decision Log
 
@@ -227,6 +233,24 @@ M1 live verification, 2026-07-08 (fetched via harness WebFetch because sandbox c
     -> getaddrinfo ENOTFOUND tia.run (root custom domain detached; Cloudflare removed the DNS record)
 
     cargo check 2>&1 | grep "^error"   -> no output (endpoints.rs flip compiles)
+
+M2/M4 live verification, 2026-07-08 (after user enabled AE + created the API token):
+
+    GET /latest.json (browser UA) + GET /download (browser UA)
+    GET /latest.json with User-Agent: gakumas-rehearsal-automation/0.9.0
+    -> AE SQL (grouped by event, ver, asset) returns, ~1 min later:
+       {"event":"download","ver":"","asset":"gakumas-rehearsal-automation-v0.9.0.zip","n":"1"}
+       {"event":"check","ver":"","asset":"","n":"1"}
+       {"event":"check","ver":"0.9.0",...,"n":"1"}     <- UA version parse works
+
+    python scripts/dist_stats.py --days 7
+    -> == Daily history, last 7 days (KV rollup) ==
+         (no rollup keys yet - the nightly cron hasn't produced data)
+       == Recent detail, last 7 days (Analytics Engine, live) ==
+         update checks: 1   unique users: 1
+         country JP         1 user(s)
+       == All-time downloads per release (GitHub tia-tools/releases) ==
+         v0.9.0           2
 
 ## Interfaces and Dependencies
 
