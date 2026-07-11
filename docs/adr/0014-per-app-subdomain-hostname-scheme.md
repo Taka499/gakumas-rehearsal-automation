@@ -1,0 +1,9 @@
+---
+status: accepted
+---
+
+# Distribution hostname is a per-app single-level subdomain of tia.run; the Worker serves only that, not the root
+
+Each tool distributed under `tia.run` gets its own single-level subdomain, and the distribution Worker serves ONLY that subdomain — this app's is `rehearsal-automation.tia.run` (manifest at `/latest.json`, permalink at `/download`). The bare `tia.run` is intentionally left unbound, reserved for a future brand landing page; there is no root alias. The updater's `MANIFEST_URL` (`src/update/endpoints.rs`) is compiled into every shipped binary, so the hostname is hard to change after a release ships (v0.9.1 onward carries the subdomain; changing it would strand those clients on their GitHub-API fallback). Rejected alternatives, each for a concrete reason: serving the bare root (would foreclose the multi-tool namespace and the brand page — the user has a concrete plan for more tools); a root *alias* alongside the subdomain (proposed, then dropped — v0.9.0 was never distributed to anyone, so no third-party binary carries the old root URL and the compatibility argument was moot); a second-level subdomain like `dl.rehearsal-automation.tia.run` (Cloudflare's free Universal SSL covers only one wildcard level, `*.tia.run`, so HTTPS on a second level fails without paid Advanced Certificate Manager); a shorter slug like `ra.tia.run` (user chose the full app name for clarity). A future tool follows the same pattern: its own single-level subdomain, its own Worker routes, never the root and never a second level.
+
+Source: user decisions, /grill-me session 2026-07-08 (Decision Log entries in `docs/EXECPLAN_DIST_PERMALINK_AND_METRICS.md`, including the intra-session supersession from root-alias to subdomain-only); confirmed by v0.9.1 shipping with the subdomain `MANIFEST_URL` and live traffic on `rehearsal-automation.tia.run` (3 unique users, 2026-07-10). Complements `docs/adr/0011` (identity-separated channel).

@@ -18,7 +18,9 @@ Also today, the developer has zero visibility into usage: no idea how many peopl
 - [x] (2026-07-08) M2: Analytics Engine event recording, deployed and live-verified end-to-end: check + download events landed in `dist_metrics` with correct schema — event type, asset name (blob5), country (JP), daily bucket, and client version (`0.9.0` from a simulated app User-Agent). User enabled Analytics Engine in the dashboard (dataset `dist_metrics`, binding `METRICS`). (NOTE: the `CF_ANALYTICS_TOKEN` secret, recorded here as set, turned out NOT to be — see the 2026-07-09 Surprises entry; it was set for real on 2026-07-09.)
 - [x] (2026-07-09) M3: nightly cron rollup into Workers KV — PROVEN working with production bindings. KV namespace `HISTORY` (id `6bd8c0bf0edc4c22b55624d7eb31c0b0`); cron `30 2 * * *` attached after registering the account's workers.dev subdomain (see Surprises). Root-caused and fixed a silent failure (missing `CF_ANALYTICS_TOKEN` secret → cron query 401'd → wrote nothing); after the fix, a production run wrote the 7-day backfill (`daily/2026-07-02`..`daily/2026-07-08`) and `dist_stats.py` reads the `2026-07-08` row (9 checks / 3 uniq / 13 web dl / versions 0.9.1×2, 0.9.0×1). The scheduler is confirmed live and UNATTENDED: the 02:30 UTC 2026-07-10 cron wrote `daily/2026-07-09` on its own (`{"downloads_browser":2,...}`) — a key the 2026-07-09 manual backfill never touched (it stopped at `daily/2026-07-08`), so only the automatic scheduler could have produced it. Full acceptance met. AE returns numeric aggregates as JSON strings; both consumers coerce.
 - [x] (2026-07-08) M4: local stats script `scripts/dist_stats.py` — runs clean; AE + GitHub sections verified with live data (KV section correctly reports "no rollup keys yet" until the first cron). See Artifacts.
-- [ ] M5: disclosure note + docs sync + close-out. (completed: dist repo README updated via bot PAT — permanent link front-and-center + JA/EN anonymous-metrics privacy section, commit `f6fa456` author verified `tia-tools-bot`; `infra/worker/README.md` metrics/secrets/prereq docs. Remaining: after M3's overnight confirmation — CLAUDE.md snapshot update, retrospective, close-out ritual.)
+- [x] (2026-07-10) M5: disclosure note + docs sync + close-out. Dist repo README updated via bot PAT — permanent link front-and-center + JA/EN anonymous-metrics privacy section, commit `f6fa456` author verified `tia-tools-bot`; `infra/worker/README.md` metrics/secrets/prereq docs. Close-out ritual complete: retrospective written, ADR 0014 (per-app-subdomain hostname scheme) added, CLAUDE.md synced.
+
+**PLAN COMPLETE (2026-07-10).** All milestones done, acceptance passed with real traffic. This document is now immutable history per `docs/PLANS.md`; later corrections live in ADRs (0012 metrics anonymity, 0014 hostname scheme) and CLAUDE.md, never by editing this plan.
 
 ## Surprises & Discoveries
 
@@ -74,7 +76,23 @@ Also today, the developer has zero visibility into usage: no idea how many peopl
 
 ## Outcomes & Retrospective
 
-- (to be written at completion)
+Completed 2026-07-10, all milestones, acceptance passed with real traffic.
+
+Achieved:
+- Permanent link `https://rehearsal-automation.tia.run/download` is live; the Worker moved off the bare `tia.run` onto the per-app subdomain, and the updater's `MANIFEST_URL` flip shipped in v0.9.1.
+- Anonymous metrics: check/download events flow into Analytics Engine (day / event / version / country / daily-rotating salted-IP bucket); the nightly cron rollup into KV is proven firing UNATTENDED (the 02:30 UTC 2026-07-10 run wrote `daily/2026-07-09` with no human action); `scripts/dist_stats.py` reads history + live AE detail + GitHub download totals. All $0 on the Workers free plan.
+- Disclosure: the dist-repo README carries a JA/EN anonymous-metrics privacy note; `infra/worker/README.md` documents the stack, secrets, and the two one-time account prerequisites.
+- Real usage already visible within days: 3 unique users (JP), both versions, v0.9.1 downloads climbing.
+
+Nothing remains functionally. ADR 0012 (metrics anonymity) pre-existed; this close-out adds ADR 0014 (the per-app-subdomain hostname scheme).
+
+Lessons:
+1. The silent-failure trap. The metrics path swallows all errors by design — correct for the request path (a telemetry hiccup must never break a redirect), but that SAME swallow hid a missing `CF_ANALYTICS_TOKEN` secret on the cron path for a full day: a misconfig looked identical to "no traffic". A best-effort telemetry pipeline needs an out-of-band health signal (e.g. `dist_stats.py` flagging "latest rollup key is N days stale"). Noted, not implemented — a candidate follow-up.
+2. Don't check the box before observing the effect. M2's Progress claimed the token secret was set; it was not, and the gap only surfaced when the KV stayed empty days later. Verify the observable outcome (a written key), not just that a command was issued — doubly so for steps that fail silently.
+3. Platform friction outweighed the code. Two Cloudflare gates each blocked a deploy with a cryptic error unrelated to our code — Analytics Engine dashboard-enable (10089) and the workers.dev-subdomain-for-cron requirement (10063). Both are now documented in `infra/worker/README.md` so the next deploy doesn't rediscover them.
+4. Design churn was productive and captured. The hostname decision moved root-alias → subdomain-canonical-with-alias → subdomain-only within one grilling session as the "v0.9.0 was never distributed" fact surfaced. The Decision Log's superseding entries preserve why; ADR 0014 records the durable outcome so the churn isn't re-litigated.
+
+Against the original purpose: fully met — a shareable permanent link and privacy-preserving usage visibility, both live and proven with real traffic.
 
 ## Context and Orientation
 
