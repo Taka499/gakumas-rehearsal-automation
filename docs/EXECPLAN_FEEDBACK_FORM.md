@@ -13,16 +13,23 @@ To see it working end-to-end: run the app, click 「フィードバック」 in 
 - [x] (2026-07-11) Design interview complete; all decisions recorded in the Decision Log.
 - [x] (2026-07-11) `docs/adr/0015-worker-holds-only-least-privilege-tokens.md` written and indexed in CLAUDE.md.
 - [x] (2026-07-11) Full plan drafted (this document).
-- [ ] M1: `tia-tools/feedback` repo + labels + issues-only PAT + Worker `/feedback` route; curl acceptance.
-- [ ] M2: Rust `src/feedback/` module (payload build, log-tail truncation, session enumeration, blocking send) with unit tests.
-- [ ] M3: GUI header button + floating form window + worker-thread send + success/failure UX; live end-to-end acceptance.
-- [ ] Update CLAUDE.md's Active ExecPlans list when work starts, and run close-out when acceptance passes.
+- [x] (2026-07-12) M1 code + infra: private repo `tia-tools/feedback` created with `bug`/`request`/`other` labels (bot turned out to be org owner, so the triage grant was redundant); Worker `/feedback` route written, deployed, and probed — all 9 rejection-path probes PASS (405/400×6/413, and the valid pre-token probe correctly 502s), `/latest.json` regression-checked OK. Committed `82c762d`. Remaining for M1: USER creates the issues-only fine-grained PAT (as `tia-tools-bot`, resource owner `tia-tools`, only repo `tia-tools/feedback`, Issues read+write, ~1yr expiry) and runs `npx wrangler secret put FEEDBACK_TOKEN` in `infra/worker/`; then the happy-path curl (issue appears) and the 6th-submission 429 probe.
+- [x] (2026-07-12) M2: `src/feedback/mod.rs` written and registered in `src/main.rs`; 7 unit tests pass (`GAKUMAS_NO_MANIFEST=1 cargo test feedback`). Note: reqwest's `json` feature is NOT enabled in this repo — the sender sets content-type and serializes via `payload.to_string()` instead. Committed `d7bf958`.
+- [x] (2026-07-12) M3 code: `FeedbackUiState` in `src/gui/state.rs`; header フィードバック button (right-aligned on the heading row) + floating window + dedicated `feedback_tx`/`feedback_rx` mpsc pair + `poll_feedback_messages`/`handle_open_feedback`/`handle_send_feedback`/`render_feedback_window` in `src/gui/mod.rs`. Full suite 148 passed; guarded release build clean (28 expected warnings). Committed `0da4054`.
+- [ ] M3 acceptance: USER performs the live click-through in Validation and Acceptance (needs the PAT/secret above first), including the offline-retry and 添付しない cases.
+- [x] (2026-07-12) CLAUDE.md's Active ExecPlans list updated (done at design time).
+- [ ] Run close-out (`/close-out`) when acceptance passes; record the PAT expiry date in Artifacts and Notes.
 
 ## Surprises & Discoveries
 
 - Observation: GitHub has no public API for attaching files to issues (the web UI's drag-and-drop upload to `user-attachments` is browser-only). A bot can only put text in the body/comments or commit files to the repo.
   Evidence: the GitHub REST API has no attachment-upload endpoint for issues. This constraint forced the "inline, truncated" log-transport decision below.
 - Observation: GitHub issue bodies cap at 65,536 characters, and this app's `session.log` files (every timestamped `log()` line of a run; see `src/main.rs::log`) exceed that for long series, so the log must be truncated client-side and defensively re-truncated Worker-side.
+- Observation: `tia-tools-bot` is an owner of the `tia-tools` org, so it already has admin on the new private repo — the planned collaborator grant was a no-op. The least-privilege boundary therefore rests entirely on the fine-grained PAT's scoping (effective access = intersection of token permissions and user permissions), which is exactly what docs/adr/0015 prescribes.
+  Evidence: `gh api repos/tia-tools/feedback/collaborators/tia-tools-bot/permission` → `{"permission":"admin"}` (2026-07-12).
+- Observation: this repo's `reqwest` has only the `blocking` feature — `RequestBuilder::json()` doesn't compile (E0599). The sender sets the content-type header and serializes with `serde_json::Value::to_string()` instead of enabling the extra feature.
+- Observation: the Worker's message-length check is JS `String.length` (UTF-16 code units), so the form counts `message.encode_utf16().count()` rather than Rust `chars().count()` — astral characters (emoji) count as 2 in both places, and nothing the form accepts can be rejected server-side.
+- Observation: the rate-limit counter is incremented only AFTER a successful issue creation (a mid-review refinement of the plan's original wording): transient GitHub failures must not eat a legitimate user's 5-per-day quota. The pre-check still happens before the GitHub call, so the limit holds.
 
 ## Decision Log
 
