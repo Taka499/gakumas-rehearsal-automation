@@ -12,6 +12,7 @@
 //   GET /download          -> 302 to the latest release's zip (permanent share link)
 //   GET /download/<asset>  -> 302 to that GitHub release asset
 //   GET / or /latest       -> 302 to the dist repo's latest-release page
+//   POST /feedback         -> create an issue in the private feedback repo
 
 const REPO = "tia-tools/releases";
 const RELEASES_PAGE = `https://github.com/${REPO}/releases`;
@@ -33,6 +34,11 @@ export default {
         return await download(env, request, ctx, decodeURIComponent(path.slice("/download/".length)));
       if (path === "/" || path === "/latest")
         return Response.redirect(`${RELEASES_PAGE}/latest`, 302);
+      if (path === "/feedback") {
+        if (request.method !== "POST")
+          return new Response("Method not allowed\n", { status: 405 });
+        return await feedback(env, request);
+      }
       return new Response("Not found\n", { status: 404 });
     } catch (err) {
       return new Response("Upstream error\n", { status: 502 });
@@ -170,6 +176,107 @@ async function aggregateDay(env, day) {
     versions: sizes(verBuckets),
     countries: sizes(countryBuckets),
   };
+}
+
+// ---- In-app feedback -> private GitHub issue --------------------------
+//
+// POST /feedback with JSON {category, message, version, log_name?, log?}
+// creates a labeled issue in the PRIVATE repo below, authenticated with
+// FEEDBACK_TOKEN — a fine-grained PAT scoped to issues-only on that one
+// repo (per docs/adr/0015 the release-publishing PAT must never be here;
+// worst case of a leak is issue spam, not a malware push). The endpoint
+// is public by design (a secret in the shipped binary would be
+// extractable), guarded by a size cap and a per-day rate limit keyed on
+// the same daily-rotating salted IP hash the metrics use (docs/adr/0012)
+// so no new identifier is introduced. Design: the automation repo's
+// docs/EXECPLAN_FEEDBACK_FORM.md.
+
+const FEEDBACK_REPO = "tia-tools/feedback";
+const FEEDBACK_BODY_MAX = 100000; // request-body byte cap
+const FEEDBACK_MESSAGE_MAX = 4000; // user-message char cap
+const FEEDBACK_ISSUE_MAX = 65000; // composed issue body (GitHub caps at 65536)
+const FEEDBACK_PER_DAY = 5; // submissions per daily bucket
+const FEEDBACK_CATEGORIES = { bug: "バグ", request: "要望", other: "その他" };
+
+async function feedback(env, request) {
+  const fail = (status) =>
+    new Response(JSON.stringify({ ok: false }) + "\n", {
+      status,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+
+  const declared = Number(request.headers.get("Content-Length") || 0);
+  if (declared > FEEDBACK_BODY_MAX) return fail(413);
+  const raw = await request.text();
+  if (raw.length > FEEDBACK_BODY_MAX) return fail(413);
+
+  let p;
+  try {
+    p = JSON.parse(raw);
+  } catch {
+    return fail(400);
+  }
+  const label = typeof p.category === "string" ? p.category : "";
+  const labelJa = FEEDBACK_CATEGORIES[label];
+  const message = typeof p.message === "string" ? p.message.trim() : "";
+  const version = typeof p.version === "string" ? p.version : "";
+  const logName = p.log_name;
+  let log = p.log;
+  if (!labelJa) return fail(400);
+  if (!message || message.length > FEEDBACK_MESSAGE_MAX) return fail(400);
+  if (version && !/^\d+\.\d+\.\d+$/.test(version)) return fail(400);
+  if ((logName === undefined) !== (log === undefined)) return fail(400);
+  if (logName !== undefined && !/^[\w.-]{1,64}$/.test(String(logName)))
+    return fail(400);
+  if (log !== undefined && typeof log !== "string") return fail(400);
+
+  // Soft rate limit (KV is eventually consistent — acceptable: the worst
+  // case is a few extra issues, and the issues-only PAT bounds the blast
+  // radius anyway). Keys expire on their own after two days.
+  const ip = request.headers.get("CF-Connecting-IP") || "";
+  const day = new Date().toISOString().slice(0, 10);
+  const bucket = await dailyBucket(ip, day, env.HASH_SALT || "");
+  const rateKey = `fb/${day}/${bucket}`;
+  let rateCount = 0;
+  if (env.HISTORY) {
+    rateCount = Number((await env.HISTORY.get(rateKey)) || 0);
+    if (rateCount >= FEEDBACK_PER_DAY) return fail(429);
+  }
+
+  const title = `[${labelJa}] ${message.split(/\r?\n/)[0].slice(0, 50)}`;
+  let body = `**Version:** ${version ? `v${version}` : "(unknown)"}\n\n${message}\n`;
+  if (log !== undefined) {
+    // Keep the composed body under GitHub's limit; the log's TAIL is the
+    // valuable part (crashes/aborts), so overflow is cut from the head.
+    // Four-backtick fence: a stray ``` inside a log line cannot close it.
+    const frame = `\n<details><summary>session.log (${logName}, tail)</summary>\n\n\`\`\`\`text\n`;
+    const close = "\n````\n\n</details>\n";
+    const room = FEEDBACK_ISSUE_MAX - body.length - frame.length - close.length;
+    if (room > 0) body += frame + log.slice(-room) + close;
+  }
+
+  if (!env.FEEDBACK_TOKEN) return fail(502);
+  const res = await fetch(`https://api.github.com/repos/${FEEDBACK_REPO}/issues`, {
+    method: "POST",
+    headers: {
+      "User-Agent": `${DOMAIN}-dist-worker`,
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${env.FEEDBACK_TOKEN}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ title, body, labels: [label] }),
+  });
+  if (res.status !== 201) return fail(502);
+  // Count only submissions that actually created an issue, so transient
+  // GitHub failures never eat into a legitimate user's daily quota.
+  if (env.HISTORY) {
+    await env.HISTORY.put(rateKey, String(rateCount + 1), {
+      expirationTtl: 172800,
+    });
+  }
+  return new Response(JSON.stringify({ ok: true }) + "\n", {
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 }
 
 function ghHeaders(env) {
