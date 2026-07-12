@@ -13,6 +13,7 @@ mod analysis;
 mod automation;
 mod calibration;
 mod capture;
+mod feedback;
 mod gui;
 mod ocr;
 mod paths;
