@@ -39,18 +39,25 @@ This procedure publishes a public GitHub release, which is outward-facing and ha
 
        git push origin main
 
-5. **Gather release-note highlights and draft notes.** Ask the user for the user-facing highlights (or derive a draft from the merged commits / the relevant ExecPlan `Purpose` section and show it for approval). Write the notes to a temp file, e.g.:
+5. **Draft the notes in `CHANGELOG.md` FIRST, then derive the release body.** Release notes are authored bilingually in the repo-root `CHANGELOG.md` (its header comment states the format; per `docs/EXECPLAN_CHANGELOG_AND_JP_NOTES.md`): add a new `## vX.Y.Z — YYYY-MM-DD` section at the top with a one-line Japanese summary, Japanese bullets for users, and a `### English` subsection for maintainers. The file is embedded into the binary (`src/gui/changelog.rs::CHANGELOG_MD` via `include_str!`) and shown in the in-app 更新履歴 window, so it MUST be written and committed BEFORE the build/package step (an entry added after building would not be in the shipped exe). Commit it together with (or right after) the version bump; push again if main was already pushed. Get the user's OK on the draft — this is the second REQUIRED human decision.
+
+   The GitHub release body is that section's content with the `## vX.Y.Z` heading dropped: the Japanese one-liner first, blank line, then the Japanese bullets and the `### English` subsection (GitHub shows both languages; that is intended). Write it to a temp file, e.g.:
 
        cat > /tmp/release-notes-vX.Y.Z.md <<'EOF'
-       ## New Features
-       ### <feature> ...
+       <one-line Japanese summary — same line as in CHANGELOG.md>
+
+       - <Japanese bullets...>
+
+       ### English
+       - <English bullets...>
+
        ## Install
        Download `gakumas-rehearsal-automation-vX.Y.Z.zip`, extract, and run `gakumas-rehearsal-automation.exe` as administrator. Embedded Tesseract OCR extracts on first run.
        EOF
 
-   Keep the notes focused on what the user can now do, in a neutral voice (no personal links or signatures — the dist repo is the identity-separated channel). Get the user's OK on the draft.
+   Keep the notes focused on what the user can now do, in a neutral voice (no personal links or signatures — the dist repo is the identity-separated channel).
 
-   IMPORTANT — first-paragraph convention: the Worker's manifest `notes` field (shown in the in-app "update available" prompt) is only the FIRST paragraph of the body, split on the first blank line. So the body MUST open with a one-line plain-text summary, then a blank line, then the `## Changes`/section detail. If you start with a `## Heading` followed by a blank line, the in-app prompt shows just that bare heading. Lead with a sentence, not a header.
+   IMPORTANT — first-paragraph convention: the Worker's manifest `notes` field (shown as the in-app アップデート button's hover hint) is only the FIRST paragraph of the body, split on the first blank line. The body MUST open with the one-line JAPANESE summary (the app's users read Japanese; this is why CHANGELOG.md leads every section with it), then a blank line, then the detail. Never open with a `## Heading` or an English sentence.
 
 6. **Build and package** (assembles `release/gakumas-rehearsal-automation/`):
 

@@ -17,11 +17,11 @@ After this plan: run the app, click 更新履歴 in the header → a window list
 ## Progress
 
 - [x] (2026-07-12) Design interview complete; all decisions recorded in the Decision Log. Plan drafted.
-- [ ] M1: review window default filter → flagged only (`src/gui/review.rs`), with a unit test on the extracted default-state constructor.
-- [ ] M2: `CHANGELOG.md` authored — format header + full bilingual backfill v0.1.0 → v0.9.1 (15 tags; fetch old release bodies, fall back to tag-range git log where no release exists).
-- [ ] M3: in-app 更新履歴 window — `src/gui/changelog.rs` (embed via include_str!, pure JP-filter with unit tests, render fn), header button, floating scrollable window.
-- [ ] M4: convention amendments to `.claude/commands/release.md` (JP-first-paragraph rule, CHANGELOG-first drafting step); retro-edit v0.9.1 release body on `tia-tools/releases` via bot PAT; verify author + manifest `notes`.
-- [ ] M5: manual acceptance — user click-through: review window default filter, 更新履歴 window content/scroll, hover hint on a forced-old build (optional).
+- [x] (2026-07-12) M1: review window default filter → flagged only; defaults extracted into `ReviewState::with_default_filters` (`src/gui/state.rs`) + unit test. Commit `c4f68dc`.
+- [x] (2026-07-12) M2: `CHANGELOG.md` authored — format header + full bilingual backfill, 15 sections v0.1.0 → v0.9.1 from the old release bodies (all 15 tags had one; none needed the git-log fallback). The v0.9.0 entry restores the live box-plot feature the published body omitted. Commit `b442dbb`.
+- [x] (2026-07-12) M3: in-app 更新履歴 window — `src/gui/changelog.rs` (include_str! embed, `japanese_only` filter with 5 unit tests incl. one over the real embedded file, plain-egui renderer), header button left of フィードバック, floating scrollable window. Full suite 154 passed / 0 failed. Commit `ba1e074`.
+- [x] (2026-07-12) M4: `.claude/commands/release.md` step 5 rewritten (CHANGELOG-first drafting, commit-before-build warning, first paragraph MUST be the one-line Japanese summary); v0.9.1 body retro-edited via bot PAT (JP one-liner prepended, rest verbatim; author verified `tia-tools-bot`); live manifest verified: `latest.json` `notes` = 「固定ダウンロードリンク、署名付き自動アップデート、匿名利用統計を追加」.
+- [ ] M5: manual acceptance — user click-through: review window opens flagged-only; 更新履歴 window shows all 15 versions in Japanese, scrolls, no English visible; (optional) hover hint on a forced-old build.
 
 ## Surprises & Discoveries
 
@@ -121,7 +121,25 @@ All code edits are ordinary commits (revertable). The only outward-facing step i
 
 ## Artifacts and Notes
 
-(Pre-edit v0.9.1 body to be captured here before the M4 edit; key transcripts appended as milestones complete.)
+Pre-edit v0.9.1 release body (captured 2026-07-12 before the M4 edit; the edit only PREPENDS a Japanese one-liner + blank line, everything below is kept verbatim):
+
+    Permanent download link, cryptographically signed auto-updates, and anonymous usage statistics.
+
+    ## Changes
+
+    ### Permanent download link
+    The latest version is always available at https://rehearsal-automation.tia.run/download — one link that never goes stale.
+
+    ### Signed, tamper-proof updates
+    In-app updates are now cryptographically signed and verified before installation, so a compromised distribution server cannot push a modified build.
+
+    ### Anonymous usage statistics
+    Downloads and update checks are now counted anonymously (date, version, country, and a daily-rotating bucket) to gauge active usage. No IP addresses or persistent identifiers are stored — see the README's Privacy section.
+
+    ## Install
+    Download `gakumas-rehearsal-automation-v0.9.1.zip`, extract to an administrator-only location (e.g. under `C:\Program Files\`), and run `gakumas-rehearsal-automation.exe` as administrator. Embedded Tesseract OCR extracts on first run.
+
+Prepended Japanese one-liner (same as CHANGELOG.md's v0.9.1 summary): 固定ダウンロードリンク、署名付き自動アップデート、匿名利用統計を追加
 
 ## Interfaces and Dependencies
 
