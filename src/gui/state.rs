@@ -80,6 +80,47 @@ pub enum UpdateUiState {
     Failed(String),
 }
 
+/// Feedback-form state (docs/EXECPLAN_FEEDBACK_FORM.md): a floating window
+/// opened from the header's フィードバック button. The send runs on a worker
+/// thread (like the update check); on failure the typed message is kept so
+/// the user can retry.
+#[derive(Debug)]
+pub struct FeedbackUiState {
+    /// Whether the form window is shown.
+    pub open: bool,
+    /// Selected category; バグ additionally shows the session-log picker.
+    pub category: crate::feedback::FeedbackCategory,
+    /// The user's message (preserved across failures and cancels).
+    pub message: String,
+    /// Recent sessions offered by the log picker, newest first. Refreshed
+    /// each time the form opens.
+    pub sessions: Vec<crate::feedback::SessionLogEntry>,
+    /// Index into `sessions` of the log to attach; `None` = 添付しない.
+    pub selected_log: Option<usize>,
+    /// A send is in flight on a worker thread.
+    pub sending: bool,
+    /// User-facing error from the last send attempt, shown inline in red.
+    pub error: Option<String>,
+    /// When the last successful send finished; the header shows a
+    /// 「✅ 送信しました」 notice for a few seconds after.
+    pub sent_toast: Option<Instant>,
+}
+
+impl Default for FeedbackUiState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            category: crate::feedback::FeedbackCategory::Bug,
+            message: String::new(),
+            sessions: Vec::new(),
+            selected_log: None,
+            sending: false,
+            error: None,
+            sent_toast: None,
+        }
+    }
+}
+
 /// Automation status for display in GUI.
 #[derive(Clone, Debug)]
 pub enum AutomationStatus {
@@ -227,6 +268,8 @@ pub struct GuiState {
     pub show_live_chart: bool,
     /// Auto-update notice state for the header panel.
     pub update: UpdateUiState,
+    /// Feedback-form window state (opened from the header).
+    pub feedback: FeedbackUiState,
 }
 
 impl Default for GuiState {
@@ -242,6 +285,7 @@ impl Default for GuiState {
             attention_counts: None,
             show_live_chart: false,
             update: UpdateUiState::Idle,
+            feedback: FeedbackUiState::default(),
         }
     }
 }

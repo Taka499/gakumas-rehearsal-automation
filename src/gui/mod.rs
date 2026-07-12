@@ -146,6 +146,11 @@ pub struct GuiApp {
     update_tx: std::sync::mpsc::Sender<UpdateMsg>,
     /// Results from the update worker threads, polled each frame.
     update_rx: std::sync::mpsc::Receiver<UpdateMsg>,
+    /// Sender cloned into feedback send threads; the payload is the send's
+    /// result (`Err` = user-facing Japanese message).
+    feedback_tx: std::sync::mpsc::Sender<Result<(), String>>,
+    /// Results from feedback send threads, polled each frame.
+    feedback_rx: std::sync::mpsc::Receiver<Result<(), String>>,
 }
 
 impl GuiApp {
@@ -182,6 +187,8 @@ impl GuiApp {
             });
         }
 
+        let (feedback_tx, feedback_rx) = std::sync::mpsc::channel();
+
         let mut app = Self {
             state,
             guide_images: [None, None],
@@ -198,6 +205,8 @@ impl GuiApp {
             exit_requested: false,
             update_tx,
             update_rx,
+            feedback_tx,
+            feedback_rx,
         };
         // Populate the resume picker with interrupted sessions found on disk.
         app.scan_resumable_sessions();
@@ -757,6 +766,191 @@ impl GuiApp {
         }
     }
 
+    /// Drain feedback-send results from worker threads into the UI state.
+    fn poll_feedback_messages(&mut self) {
+        while let Ok(result) = self.feedback_rx.try_recv() {
+            let fb = &mut self.state.feedback;
+            fb.sending = false;
+            match result {
+                Ok(()) => {
+                    fb.open = false;
+                    fb.message.clear();
+                    fb.error = None;
+                    fb.sent_toast = Some(std::time::Instant::now());
+                }
+                Err(msg) => {
+                    // Keep the window open and the text intact for a retry.
+                    fb.error = Some(msg);
+                }
+            }
+        }
+    }
+
+    /// Handle the header's フィードバック button: refresh the session-log
+    /// picker from disk and show the form window.
+    fn handle_open_feedback(&mut self) {
+        let fb = &mut self.state.feedback;
+        fb.sessions = crate::feedback::list_session_logs(
+            &crate::paths::get_output_dir(),
+            crate::feedback::SESSION_PICKER_MAX,
+        );
+        // Newest session preselected (a bug report almost always concerns the
+        // run just performed); 「添付しない」 remains available in the picker.
+        fb.selected_log = if fb.sessions.is_empty() { None } else { Some(0) };
+        fb.error = None;
+        fb.open = true;
+    }
+
+    /// Handle the form's 送信 button: read the selected session log (if any)
+    /// and send on a worker thread — blocking file + network I/O must stay
+    /// off the GUI thread. The result comes back via `feedback_rx`.
+    fn handle_send_feedback(&mut self, ctx: &egui::Context) {
+        let fb = &mut self.state.feedback;
+        if fb.sending {
+            return;
+        }
+        let category = fb.category;
+        let message = fb.message.trim().to_string();
+        if message.is_empty() {
+            return;
+        }
+        // The log is only attached for bug reports; the picker is hidden for
+        // other categories, so any lingering selection must not leak through.
+        let log_entry = if category == crate::feedback::FeedbackCategory::Bug {
+            fb.selected_log.and_then(|i| fb.sessions.get(i).cloned())
+        } else {
+            None
+        };
+        fb.sending = true;
+        fb.error = None;
+        let tx = self.feedback_tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let log_data = match &log_entry {
+                    Some(entry) => {
+                        // Lossy read: a stray non-UTF-8 byte in a log must not
+                        // block the whole report.
+                        let bytes = std::fs::read(&entry.path).map_err(|_| {
+                            "ログの読み込みに失敗しました。「添付しない」を選ぶと送信できます"
+                                .to_string()
+                        })?;
+                        Some((
+                            entry.name.clone(),
+                            String::from_utf8_lossy(&bytes).into_owned(),
+                        ))
+                    }
+                    None => None,
+                };
+                let log_ref = log_data.as_ref().map(|(name, text)| {
+                    (
+                        name.as_str(),
+                        crate::feedback::log_tail(text, crate::feedback::LOG_TAIL_MAX),
+                    )
+                });
+                crate::feedback::send_feedback(category, &message, log_ref)
+            })();
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Render the feedback form as a floating window (opened from the header;
+    /// see docs/EXECPLAN_FEEDBACK_FORM.md). Actions that need `&mut self`
+    /// beyond the feedback state are collected as flags and dispatched after
+    /// the closure, per this file's usual pattern.
+    fn render_feedback_window(&mut self, ctx: &egui::Context) {
+        if !self.state.feedback.open {
+            return;
+        }
+        let fb = &mut self.state.feedback;
+        let mut send_clicked = false;
+        let mut cancel_clicked = false;
+        let mut open = fb.open;
+        egui::Window::new("フィードバック")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(380.0)
+            .show(ctx, |ui| {
+                egui::ComboBox::from_label("カテゴリ")
+                    .selected_text(fb.category.label_ja())
+                    .show_ui(ui, |ui| {
+                        for c in crate::feedback::FeedbackCategory::ALL {
+                            ui.selectable_value(&mut fb.category, c, c.label_ja());
+                        }
+                    });
+                if fb.category == crate::feedback::FeedbackCategory::Bug {
+                    let selected_text = fb
+                        .selected_log
+                        .and_then(|i| fb.sessions.get(i))
+                        .map(|s| s.name.as_str())
+                        .unwrap_or("添付しない");
+                    egui::ComboBox::from_label("セッションログ")
+                        .selected_text(selected_text)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut fb.selected_log, None, "添付しない");
+                            for (i, s) in fb.sessions.iter().enumerate() {
+                                ui.selectable_value(&mut fb.selected_log, Some(i), &s.name);
+                            }
+                        });
+                }
+                ui.add_space(4.0);
+                ui.add(
+                    egui::TextEdit::multiline(&mut fb.message)
+                        .desired_rows(5)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("ご意見や不具合の内容をご記入ください"),
+                );
+                // UTF-16 units to match the Worker's JS `message.length` check,
+                // so nothing the form accepts is rejected server-side.
+                let len = fb.message.encode_utf16().count();
+                if len > crate::feedback::MESSAGE_MAX {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "文字数が上限を超えています ({len}/{})",
+                            crate::feedback::MESSAGE_MAX
+                        ))
+                        .color(egui::Color32::RED)
+                        .small(),
+                    );
+                }
+                let mut disclosure =
+                    String::from("送信内容: メッセージ、カテゴリ、アプリのバージョン");
+                if fb.category == crate::feedback::FeedbackCategory::Bug
+                    && fb.selected_log.is_some()
+                {
+                    disclosure.push_str("、選択したセッションログ (末尾60KBまで)");
+                }
+                ui.label(egui::RichText::new(disclosure).small().weak());
+                if let Some(err) = &fb.error {
+                    ui.label(egui::RichText::new(err).color(egui::Color32::RED).small());
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if fb.sending {
+                        ui.spinner();
+                        ui.label("送信中...");
+                    } else {
+                        let can_send = !fb.message.trim().is_empty()
+                            && len <= crate::feedback::MESSAGE_MAX;
+                        if ui.add_enabled(can_send, egui::Button::new("送信")).clicked() {
+                            send_clicked = true;
+                        }
+                        if ui.button("キャンセル").clicked() {
+                            cancel_clicked = true;
+                        }
+                    }
+                });
+            });
+        // The window's × and キャンセル both hide the form; the message is
+        // kept either way so nothing typed is ever lost.
+        self.state.feedback.open = open && !cancel_clicked;
+        if send_clicked {
+            self.handle_send_feedback(ctx);
+        }
+    }
+
     /// Handle the header's アップデート button: run download → verify → swap on
     /// a worker thread (blocking network + file I/O must stay off the GUI thread).
     fn handle_install_update(&mut self, ctx: &egui::Context) {
@@ -818,9 +1012,24 @@ impl eframe::App for GuiApp {
         // Drain update-check/install results from the worker threads.
         self.poll_update_messages();
 
+        // Drain feedback-send results from the worker threads.
+        self.poll_feedback_messages();
+
         // Keep the download spinner animating while an install runs.
         if matches!(self.state.update, UpdateUiState::Downloading) {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
+        // Keep the send spinner animating, and expire the sent notice.
+        if self.state.feedback.sending {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        if let Some(t) = self.state.feedback.sent_toast {
+            if t.elapsed() > std::time::Duration::from_secs(4) {
+                self.state.feedback.sent_toast = None;
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            }
         }
 
         // Rebuild the live distribution figure when new iteration data has arrived.
@@ -861,12 +1070,26 @@ impl eframe::App for GuiApp {
         let mut install_clicked = false;
         let mut restart_clicked = false;
         let mut dismiss_update_error = false;
+        let mut feedback_clicked = false;
         let automation_running = self.state.status.is_running();
         egui::TopBottomPanel::top("header_panel")
             .show_separator_line(false)
             .show(ctx, |ui| {
             ui.add_space(4.0);
-            ui.heading("学マス リハーサル統計自動化ツール");
+            ui.horizontal(|ui| {
+                ui.heading("学マス リハーサル統計自動化ツール");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("フィードバック").clicked() {
+                        feedback_clicked = true;
+                    }
+                    if self.state.feedback.sent_toast.is_some() {
+                        ui.label(
+                            egui::RichText::new("✅ 送信しました")
+                                .color(egui::Color32::from_rgb(0x2e, 0x7d, 0x32)),
+                        );
+                    }
+                });
+            });
             ui.label(
                 egui::RichText::new(
                     "💡 ショートカット: Ctrl+Shift+S でスクリーンショット／ Ctrl+Shift+Q で自動実行を中止",
@@ -942,6 +1165,12 @@ impl eframe::App for GuiApp {
         if dismiss_update_error {
             self.state.update = UpdateUiState::Idle;
         }
+        if feedback_clicked {
+            self.handle_open_feedback();
+        }
+
+        // Feedback form (floating window; renders only while open).
+        self.render_feedback_window(ctx);
 
         // Left: the rehearsal-page guide image (fixed width).
         egui::SidePanel::left("guide_panel")
