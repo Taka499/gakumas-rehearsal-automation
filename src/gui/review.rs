@@ -43,22 +43,7 @@ impl ReviewController {
         match load_review_rows(&session_path) {
             Ok(rows) => {
                 let edits = edits_from_rows(&rows);
-                self.state = Some(ReviewState {
-                    session_path,
-                    rows,
-                    edits,
-                    show_all: false,
-                    show_ok: false,
-                    show_repaired: true,
-                    show_flagged: true,
-                    show_manual: false,
-                    show_verified: false,
-                    search: String::new(),
-                    dirty: false,
-                    preview: None,
-                    expanded: None,
-                    open: true,
-                });
+                self.state = Some(ReviewState::with_default_filters(session_path, rows, edits));
                 crate::log("GUI: Opened OCR result review window");
             }
             Err(e) => {

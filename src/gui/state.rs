@@ -22,8 +22,9 @@ pub struct ReviewState {
     /// Master override: when true, every status is shown regardless of the
     /// per-status toggles below (search still narrows).
     pub show_all: bool,
-    /// Per-status visibility toggles. Default: flagged + repaired on, ok + manual
-    /// + verified off (the attention-needed rows). Combined with `search` (AND).
+    /// Per-status visibility toggles. Default: flagged only — the rows a human
+    /// must act on (repaired rows were auto-fixed and satisfy the checksum, so
+    /// they start hidden). Combined with `search` (AND).
     pub show_ok: bool,
     pub show_repaired: bool,
     pub show_flagged: bool,
@@ -41,6 +42,34 @@ pub struct ReviewState {
     pub expanded: Option<u32>,
     /// Whether the review window is shown.
     pub open: bool,
+}
+
+impl ReviewState {
+    /// Fresh review state with the default filters: only `flagged` visible
+    /// (per docs/EXECPLAN_CHANGELOG_AND_JP_NOTES.md M1 — the window opens on
+    /// the rows that need a human decision).
+    pub fn with_default_filters(
+        session_path: PathBuf,
+        rows: Vec<ReviewRow>,
+        edits: Vec<[[String; 3]; 3]>,
+    ) -> Self {
+        Self {
+            session_path,
+            rows,
+            edits,
+            show_all: false,
+            show_ok: false,
+            show_repaired: false,
+            show_flagged: true,
+            show_manual: false,
+            show_verified: false,
+            search: String::new(),
+            dirty: false,
+            preview: None,
+            expanded: None,
+            open: true,
+        }
+    }
 }
 
 impl std::fmt::Debug for ReviewState {
@@ -287,5 +316,24 @@ impl Default for GuiState {
             update: UpdateUiState::Idle,
             feedback: FeedbackUiState::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The review window must open showing only the rows that need a human
+    /// decision: `flagged` on, everything else (incl. auto-`repaired`) off.
+    #[test]
+    fn review_default_filter_is_flagged_only() {
+        let s = ReviewState::with_default_filters(PathBuf::from("x"), Vec::new(), Vec::new());
+        assert!(s.show_flagged);
+        assert!(!s.show_repaired);
+        assert!(!s.show_ok);
+        assert!(!s.show_manual);
+        assert!(!s.show_verified);
+        assert!(!s.show_all);
+        assert!(s.open);
     }
 }
