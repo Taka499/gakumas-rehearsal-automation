@@ -17,9 +17,10 @@ To see it working end-to-end: run the app, click 「フィードバック」 in 
 - [x] (2026-07-12) M1 acceptance PASSED: user created the issues-only fine-grained PAT and set the `FEEDBACK_TOKEN` wrangler secret; two live probes both returned `{"ok":true}` and produced issues #1/#2 in `tia-tools/feedback` authored by `tia-tools-bot` — correct `[その他]`/`[バグ]` titles (first line only), correct labels, `**Version:**` line present; the 70,000-char-log probe yielded a body of exactly 65,000 chars with the tail marker preserved and the head marker cut, inside the collapsed details block. Probe issues closed after verification. The 429 path was NOT probed to preserve the shared 5/day IP budget for the user's click-through (2 of 5 spent); the 6th submission of the day doubles as the 429 acceptance.
 - [x] (2026-07-12) M2: `src/feedback/mod.rs` written and registered in `src/main.rs`; 7 unit tests pass (`GAKUMAS_NO_MANIFEST=1 cargo test feedback`). Note: reqwest's `json` feature is NOT enabled in this repo — the sender sets content-type and serializes via `payload.to_string()` instead. Committed `d7bf958`.
 - [x] (2026-07-12) M3 code: `FeedbackUiState` in `src/gui/state.rs`; header フィードバック button (right-aligned on the heading row) + floating window + dedicated `feedback_tx`/`feedback_rx` mpsc pair + `poll_feedback_messages`/`handle_open_feedback`/`handle_send_feedback`/`render_feedback_window` in `src/gui/mod.rs`. Full suite 148 passed; guarded release build clean (28 expected warnings). Committed `0da4054`.
-- [ ] M3 acceptance: USER performs the live click-through in Validation and Acceptance. Partially done (2026-07-12): one real submission from the UI (その他, no log) arrived as issue #3 with correct title/label/version/body — the UI→Worker→issue path is proven. Remaining: bug report with the newest session log attached (verify the log block content), offline → inline error with text preserved → reconnect retry succeeds, and mid-run reachability of the header button. Budget note: 3 of today's 5 submissions used (2 probes + 1 user); a 6th today would demonstrate the 429.
+- [x] (2026-07-12) M3 acceptance PASSED (user click-through): issue #3 (その他, no log block — correct), issue #4 (バグ with the preselected newest session's log tail, ~60KB ending "All processing complete"), issue #5 (offline send showed the inline red error with the text preserved; after reconnect the retry succeeded, log intact). The 429 quota path confirmed on the day's 6th submission. Header button verified visible and clickable during a running session (user note: effectively exercised while paused, since the mouse is owned by the automation while actively running — reachability is what the decision required, and it holds).
 - [x] (2026-07-12) CLAUDE.md's Active ExecPlans list updated (done at design time).
-- [ ] Run close-out (`/close-out`) when acceptance passes; record the PAT expiry date in Artifacts and Notes.
+- [x] (2026-07-12) PAT expiry recorded (2027-07-13, token `2026-07-13_366days_gakumas_feedback`).
+- [x] (2026-07-12) Close-out complete: retrospective written, ADR sweep done (zero new ADRs — docs/adr/0015 was already extracted at design time), CLAUDE.md entry flipped to Complete + `src/feedback/` added to the architecture list. **PLAN COMPLETE — immutable history from here.**
 
 ## Surprises & Discoveries
 
@@ -76,7 +77,11 @@ To see it working end-to-end: run the app, click 「フィードバック」 in 
 
 ## Outcomes & Retrospective
 
-(To be written at completion.)
+(2026-07-12) Delivered exactly what the Purpose promised, one day after the design interview: an anonymous user of the distributed app can now send feedback (and, for bugs, an explicitly chosen session log) from inside the GUI, and it arrives as a private, labeled, bot-authored GitHub issue the developer triages with normal GitHub notifications. Acceptance evidence: 9/9 Worker rejection-path probes; truncation proven exact (70,000-char log → 65,000-char body, tail preserved); real-UI issues #3/#4/#5 covering no-log, log-attached, and offline-error-then-retry flows; the 429 quota message on the day's 6th submission; header reachability in every state.
+
+What remains: nothing functional. Housekeeping only — the `FEEDBACK_TOKEN` PAT expires 2027-07-13 (renewal procedure in Artifacts and Notes), and the form ships to users with the next release (v0.9.1 users have no feedback button until then; the endpoint is already live and backward-compatible).
+
+Lessons learned: (1) The grilling interview caught the "attach a file to the issue" impossibility (no GitHub API for it) before any code existed — the log-transport design never had to backtrack. (2) Live probes and the user's click-through share one IP under a per-IP daily quota; budgeting probe submissions (2 of 5) had to be planned, and switching the rate counter to increment-only-on-success both fixed a real UX wart (transient failures burning quota) and made the offline-retry acceptance free. (3) The bot being an org owner means repo-level grants are meaningless for it — the fine-grained PAT's scoping carries the entire least-privilege guarantee (docs/adr/0015), worth knowing before trusting any future "the bot only has triage" reasoning. (4) `curl` was denied by session permissions; node scripts were an adequate stand-in and their transcripts are in Artifacts and Notes.
 
 ## Context and Orientation
 
@@ -206,3 +211,5 @@ In `src/gui/state.rs` define `FeedbackUiState` as described in Plan of Work, own
 ---
 
 Revision note (2026-07-11): initial full draft, written at the end of the /grill-me design interview that produced the Decision Log above; no implementation has begun.
+
+Revision note (2026-07-12, final): implementation and acceptance recorded in Progress/Surprises/Artifacts as work proceeded; retrospective written and plan stamped COMPLETE at close-out. This is the last revision — the document is immutable history from here (per docs/adr/README.md).
