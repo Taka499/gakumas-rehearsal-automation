@@ -13,7 +13,8 @@ To see it working end-to-end: run the app, click 「フィードバック」 in 
 - [x] (2026-07-11) Design interview complete; all decisions recorded in the Decision Log.
 - [x] (2026-07-11) `docs/adr/0015-worker-holds-only-least-privilege-tokens.md` written and indexed in CLAUDE.md.
 - [x] (2026-07-11) Full plan drafted (this document).
-- [x] (2026-07-12) M1 code + infra: private repo `tia-tools/feedback` created with `bug`/`request`/`other` labels (bot turned out to be org owner, so the triage grant was redundant); Worker `/feedback` route written, deployed, and probed — all 9 rejection-path probes PASS (405/400×6/413, and the valid pre-token probe correctly 502s), `/latest.json` regression-checked OK. Committed `82c762d`. Remaining for M1: USER creates the issues-only fine-grained PAT (as `tia-tools-bot`, resource owner `tia-tools`, only repo `tia-tools/feedback`, Issues read+write, ~1yr expiry) and runs `npx wrangler secret put FEEDBACK_TOKEN` in `infra/worker/`; then the happy-path curl (issue appears) and the 6th-submission 429 probe.
+- [x] (2026-07-12) M1 code + infra: private repo `tia-tools/feedback` created with `bug`/`request`/`other` labels (bot turned out to be org owner, so the triage grant was redundant); Worker `/feedback` route written, deployed, and probed — all 9 rejection-path probes PASS (405/400×6/413, and the valid pre-token probe correctly 502s), `/latest.json` regression-checked OK. Committed `82c762d`.
+- [x] (2026-07-12) M1 acceptance PASSED: user created the issues-only fine-grained PAT and set the `FEEDBACK_TOKEN` wrangler secret; two live probes both returned `{"ok":true}` and produced issues #1/#2 in `tia-tools/feedback` authored by `tia-tools-bot` — correct `[その他]`/`[バグ]` titles (first line only), correct labels, `**Version:**` line present; the 70,000-char-log probe yielded a body of exactly 65,000 chars with the tail marker preserved and the head marker cut, inside the collapsed details block. Probe issues closed after verification. The 429 path was NOT probed to preserve the shared 5/day IP budget for the user's click-through (2 of 5 spent); the 6th submission of the day doubles as the 429 acceptance.
 - [x] (2026-07-12) M2: `src/feedback/mod.rs` written and registered in `src/main.rs`; 7 unit tests pass (`GAKUMAS_NO_MANIFEST=1 cargo test feedback`). Note: reqwest's `json` feature is NOT enabled in this repo — the sender sets content-type and serializes via `payload.to_string()` instead. Committed `d7bf958`.
 - [x] (2026-07-12) M3 code: `FeedbackUiState` in `src/gui/state.rs`; header フィードバック button (right-aligned on the heading row) + floating window + dedicated `feedback_tx`/`feedback_rx` mpsc pair + `poll_feedback_messages`/`handle_open_feedback`/`handle_send_feedback`/`render_feedback_window` in `src/gui/mod.rs`. Full suite 148 passed; guarded release build clean (28 expected warnings). Committed `0da4054`.
 - [ ] M3 acceptance: USER performs the live click-through in Validation and Acceptance (needs the PAT/secret above first), including the offline-retry and 添付しない cases.
@@ -156,7 +157,13 @@ Everything here is additive and re-runnable. `wrangler deploy` is idempotent; re
 
 ## Artifacts and Notes
 
-- Record here when created: `FEEDBACK_TOKEN` PAT expiry date (expected mid-2027), and the M1 curl transcript.
+- `FEEDBACK_TOKEN` PAT created 2026-07-12 by the user (issues-only, repo `tia-tools/feedback`); expiry date not yet recorded here — ASK THE USER and fill in (a Worker-side 502 on previously-working /feedback means check for a 401 from GitHub → renew the PAT and `npx wrangler secret put FEEDBACK_TOKEN`).
+- M1 acceptance transcript (2026-07-12, via node probe scripts — curl was denied by session permissions):
+
+      plain:   HTTP 200 {"ok":true}   -> issue #1 [その他], label other, author tia-tools-bot
+      big-log: HTTP 200 {"ok":true}   -> issue #2 [バグ], label bug, body_len 65000,
+               TAIL-MARKER-MUST-SURVIVE present, HEAD-MARKER-SHOULD-BE-CUT absent
+      (rejection paths, earlier same setup: 405 GET / 400 ×6 / 413 oversized all PASS)
 - Request JSON shape (client → Worker), all strings, `log_name`/`log` optional and only present together:
 
       {"category":"bug","message":"…","version":"0.9.1","log_name":"20260704_052007","log":"[05:20:07.123] …"}
