@@ -17,7 +17,7 @@ To see it working end-to-end: run the app, click 「フィードバック」 in 
 - [x] (2026-07-12) M1 acceptance PASSED: user created the issues-only fine-grained PAT and set the `FEEDBACK_TOKEN` wrangler secret; two live probes both returned `{"ok":true}` and produced issues #1/#2 in `tia-tools/feedback` authored by `tia-tools-bot` — correct `[その他]`/`[バグ]` titles (first line only), correct labels, `**Version:**` line present; the 70,000-char-log probe yielded a body of exactly 65,000 chars with the tail marker preserved and the head marker cut, inside the collapsed details block. Probe issues closed after verification. The 429 path was NOT probed to preserve the shared 5/day IP budget for the user's click-through (2 of 5 spent); the 6th submission of the day doubles as the 429 acceptance.
 - [x] (2026-07-12) M2: `src/feedback/mod.rs` written and registered in `src/main.rs`; 7 unit tests pass (`GAKUMAS_NO_MANIFEST=1 cargo test feedback`). Note: reqwest's `json` feature is NOT enabled in this repo — the sender sets content-type and serializes via `payload.to_string()` instead. Committed `d7bf958`.
 - [x] (2026-07-12) M3 code: `FeedbackUiState` in `src/gui/state.rs`; header フィードバック button (right-aligned on the heading row) + floating window + dedicated `feedback_tx`/`feedback_rx` mpsc pair + `poll_feedback_messages`/`handle_open_feedback`/`handle_send_feedback`/`render_feedback_window` in `src/gui/mod.rs`. Full suite 148 passed; guarded release build clean (28 expected warnings). Committed `0da4054`.
-- [ ] M3 acceptance: USER performs the live click-through in Validation and Acceptance (needs the PAT/secret above first), including the offline-retry and 添付しない cases.
+- [ ] M3 acceptance: USER performs the live click-through in Validation and Acceptance. Partially done (2026-07-12): one real submission from the UI (その他, no log) arrived as issue #3 with correct title/label/version/body — the UI→Worker→issue path is proven. Remaining: bug report with the newest session log attached (verify the log block content), offline → inline error with text preserved → reconnect retry succeeds, and mid-run reachability of the header button. Budget note: 3 of today's 5 submissions used (2 probes + 1 user); a 6th today would demonstrate the 429.
 - [x] (2026-07-12) CLAUDE.md's Active ExecPlans list updated (done at design time).
 - [ ] Run close-out (`/close-out`) when acceptance passes; record the PAT expiry date in Artifacts and Notes.
 
@@ -157,7 +157,7 @@ Everything here is additive and re-runnable. `wrangler deploy` is idempotent; re
 
 ## Artifacts and Notes
 
-- `FEEDBACK_TOKEN` PAT created 2026-07-12 by the user (issues-only, repo `tia-tools/feedback`); expiry date not yet recorded here — ASK THE USER and fill in (a Worker-side 502 on previously-working /feedback means check for a 401 from GitHub → renew the PAT and `npx wrangler secret put FEEDBACK_TOKEN`).
+- `FEEDBACK_TOKEN` PAT: created 2026-07-12 by the user as `tia-tools-bot`, token name `2026-07-13_366days_gakumas_feedback`, issues-only on repo `tia-tools/feedback`, EXPIRES 2027-07-13. A Worker-side 502 on previously-working /feedback around then means the PAT lapsed → renew it in the bot account and `npx wrangler secret put FEEDBACK_TOKEN` in `infra/worker/`.
 - M1 acceptance transcript (2026-07-12, via node probe scripts — curl was denied by session permissions):
 
       plain:   HTTP 200 {"ok":true}   -> issue #1 [その他], label other, author tia-tools-bot
