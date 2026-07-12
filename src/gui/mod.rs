@@ -2,6 +2,7 @@
 //!
 //! Provides a graphical interface using egui/eframe for user interaction.
 
+mod changelog;
 mod clipboard;
 pub(crate) mod copyable;
 mod live_chart;
@@ -129,6 +130,8 @@ pub struct GuiApp {
     /// The single shared slot for the right-click-copy fade notice; painted
     /// over whichever image was copied last (see `copyable`).
     copy_toast: Option<CopyToast>,
+    /// Whether the 更新履歴 (release history) window is shown. Not persisted.
+    show_changelog: bool,
     /// Whether the window is currently expanded to make room for the live plot
     /// side panel. Used to resize once on show/hide rather than every frame.
     live_chart_expanded: bool,
@@ -196,6 +199,7 @@ impl GuiApp {
             live_chart: LiveChartCache::new(),
             review: ReviewController::new(),
             copy_toast: None,
+            show_changelog: false,
             // Seed to match the persisted preference so the initial viewport size
             // (chosen in run_gui) is not resized on the first frame.
             live_chart_expanded: settings.show_live_chart,
@@ -1082,6 +1086,15 @@ impl eframe::App for GuiApp {
                     if ui.button("フィードバック").clicked() {
                         feedback_clicked = true;
                     }
+                    // Right-to-left layout: added after フィードバック so it
+                    // appears to its left.
+                    if ui
+                        .button("更新履歴")
+                        .on_hover_text("これまでのバージョンの変更内容を表示します")
+                        .clicked()
+                    {
+                        self.show_changelog = !self.show_changelog;
+                    }
                     if self.state.feedback.sent_toast.is_some() {
                         ui.label(
                             egui::RichText::new("✅ 送信しました")
@@ -1171,6 +1184,7 @@ impl eframe::App for GuiApp {
 
         // Feedback form (floating window; renders only while open).
         self.render_feedback_window(ctx);
+        changelog::show_window(ctx, &mut self.show_changelog);
 
         // Left: the rehearsal-page guide image (fixed width).
         egui::SidePanel::left("guide_panel")
