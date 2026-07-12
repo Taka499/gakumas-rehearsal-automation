@@ -21,7 +21,7 @@ After this plan: run the app, click 更新履歴 in the header → a window list
 - [x] (2026-07-12) M2: `CHANGELOG.md` authored — format header + full bilingual backfill, 15 sections v0.1.0 → v0.9.1 from the old release bodies (all 15 tags had one; none needed the git-log fallback). The v0.9.0 entry restores the live box-plot feature the published body omitted. Commit `b442dbb`.
 - [x] (2026-07-12) M3: in-app 更新履歴 window — `src/gui/changelog.rs` (include_str! embed, `japanese_only` filter with 5 unit tests incl. one over the real embedded file, plain-egui renderer), header button left of フィードバック, floating scrollable window. Full suite 154 passed / 0 failed. Commit `ba1e074`.
 - [x] (2026-07-12) M4: `.claude/commands/release.md` step 5 rewritten (CHANGELOG-first drafting, commit-before-build warning, first paragraph MUST be the one-line Japanese summary); v0.9.1 body retro-edited via bot PAT (JP one-liner prepended, rest verbatim; author verified `tia-tools-bot`); live manifest verified: `latest.json` `notes` = 「固定ダウンロードリンク、署名付き自動アップデート、匿名利用統計を追加」.
-- [ ] M5: manual acceptance — user click-through: review window opens flagged-only; 更新履歴 window shows all 15 versions in Japanese, scrolls, no English visible; (optional) hover hint on a forced-old build.
+- [x] (2026-07-13) M5: manual acceptance passed — user confirmed during the v0.10.0 release pre-flight: review window opens flagged-only; 更新履歴 window shows all versions in Japanese. (Forced-old-build hover-hint check skipped as optional; the live manifest's Japanese `notes` was already verified in M4.)
 
 ## Surprises & Discoveries
 

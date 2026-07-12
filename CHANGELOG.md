@@ -12,6 +12,19 @@ Format (per docs/EXECPLAN_CHANGELOG_AND_JP_NOTES.md):
 
 # 更新履歴 / Changelog
 
+## v0.10.0 — 2026-07-13
+
+アプリ内からのフィードバック送信と、更新履歴の表示機能を追加
+
+- ヘッダーの「フィードバック」ボタンから、ご意見や不具合の報告をアプリ内から直接送信できるようになりました（バグ報告にはセッションログを添付できます）
+- ヘッダーの「更新履歴」ボタンで、これまでのバージョンの変更内容をいつでも確認できるようになりました
+- 「結果の確認・修正」画面は、要確認（flagged）の行だけを最初に表示するようになりました
+
+### English
+- In-app feedback form: header フィードバック button opens a floating form (message + bug/request/other; bug reveals a session-log picker, newest preselected). POSTs to the tia.run Worker, which creates labeled issues in the private `tia-tools/feedback` repo; log travels inline, tail-truncated to ~60KB; rate-limited 5/day.
+- In-app 更新履歴 window: the bilingual repo CHANGELOG.md is embedded into the binary via `include_str!` and rendered Japanese-only in a scrollable window.
+- Review window now opens with the flagged-only status filter (repaired rows start hidden).
+
 ## v0.9.1 — 2026-07-08
 
 固定ダウンロードリンク、署名付き自動アップデート、匿名利用統計を追加
