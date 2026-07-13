@@ -22,6 +22,7 @@ After this plan: run the app, click 更新履歴 in the header → a window list
 - [x] (2026-07-12) M3: in-app 更新履歴 window — `src/gui/changelog.rs` (include_str! embed, `japanese_only` filter with 5 unit tests incl. one over the real embedded file, plain-egui renderer), header button left of フィードバック, floating scrollable window. Full suite 154 passed / 0 failed. Commit `ba1e074`.
 - [x] (2026-07-12) M4: `.claude/commands/release.md` step 5 rewritten (CHANGELOG-first drafting, commit-before-build warning, first paragraph MUST be the one-line Japanese summary); v0.9.1 body retro-edited via bot PAT (JP one-liner prepended, rest verbatim; author verified `tia-tools-bot`); live manifest verified: `latest.json` `notes` = 「固定ダウンロードリンク、署名付き自動アップデート、匿名利用統計を追加」.
 - [x] (2026-07-13) M5: manual acceptance passed — user confirmed during the v0.10.0 release pre-flight: review window opens flagged-only; 更新履歴 window shows all versions in Japanese. (Forced-old-build hover-hint check skipped as optional; the live manifest's Japanese `notes` was already verified in M4.)
+- [x] (2026-07-13) PLAN COMPLETE — closed out per the close-out ritual (retrospective written, ADR sweep done: zero ADRs, snapshot updated). Shipped in v0.10.0. This document is immutable history.
 
 ## Surprises & Discoveries
 
@@ -61,7 +62,13 @@ After this plan: run the app, click 更新履歴 in the header → a window list
 
 ## Outcomes & Retrospective
 
-(To be written at completion.)
+(2026-07-13) Complete, and shipped the same day: all of M1–M4 landed 2026-07-12 (commits `c4f68dc`, `b442dbb`, `ba1e074`, `cc3f400`), M5 manual acceptance passed 2026-07-13 during the v0.10.0 release pre-flight, and v0.10.0 itself — published later that day — became the first release to exercise the new CHANGELOG-first flow end-to-end (its section written in `CHANGELOG.md` before the build so the shipped exe embeds its own entry; body derived from the section; `latest.json` `notes` observed as the Japanese one-liner 「アプリ内からのフィードバック送信と、更新履歴の表示機能を追加」 immediately after publish).
+
+Against the Purpose: all three user-visible goals hold — review window opens flagged-only (user-confirmed), 更新履歴 lists every version back to v0.1.0 in Japanese with no English leaking (user-confirmed; also proven by the `embedded_changelog_filters_cleanly` unit test over the real file), and the live manifest serves a Japanese hint (verified twice: after the v0.9.1 retro-edit and after v0.10.0). Nothing remains.
+
+Lessons: (1) the updater's never-overwrite-existing-root-files rule silently invalidates the obvious "ship a data file in the zip" design — checking `install.rs` before committing to a delivery mechanism saved a stale-changelog bug that would only have surfaced one release later; `include_str!` was both safer and less code. (2) Backfilling from published release bodies is not just transcription — the v0.9.0 body turned out to omit a major shipped feature (the live box-plot panel), so the changelog is now more complete than the release pages it was derived from. (3) The one-line-Japanese-summary-first convention costs nothing in code because all three consumers (Worker, GitHub-fallback parser, release skill) split on the first blank line without interpreting content — conventions that ride existing mechanics are the cheapest kind.
+
+Close-out (2026-07-13): Decision Log and Surprises swept per `docs/adr/README.md` — the in-plan "no ADR" decision stands (the durable conventions live in `.claude/commands/release.md` and CHANGELOG.md's header comment, both read at the point of use; the updater's root-file rule was already documented in `install.rs` and CLAUDE.md). CLAUDE.md snapshot updated. This plan is now immutable history.
 
 ## Context and Orientation
 
