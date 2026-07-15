@@ -42,6 +42,8 @@ pub(crate) struct CropBox {
 /// 2. Captures it via the shared D3D11 pipeline, cropped to the client area
 ///    (excluding title bar and borders)
 /// 3. Saves as a PNG file with timestamp
+/// 4. Copies the image to the system clipboard (best-effort: a clipboard
+///    failure only logs a warning — the saved file is the product)
 ///
 /// Returns the path to the saved screenshot file.
 pub fn capture_gakumas() -> Result<PathBuf> {
@@ -77,6 +79,14 @@ pub fn capture_gakumas() -> Result<PathBuf> {
 
     img.save(&path)?;
     crate::log(&format!("Saved to {}", crate::paths::relative_display(&path)));
+
+    match crate::gui::clipboard::copy_rgba_image(img.width(), img.height(), img.as_raw()) {
+        Ok(()) => crate::log("Copied screenshot to clipboard"),
+        Err(e) => crate::log(&format!(
+            "Clipboard copy failed (screenshot still saved): {:#}",
+            e
+        )),
+    }
 
     Ok(path)
 }

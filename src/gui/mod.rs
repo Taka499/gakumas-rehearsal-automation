@@ -3,7 +3,7 @@
 //! Provides a graphical interface using egui/eframe for user interaction.
 
 mod changelog;
-mod clipboard;
+pub(crate) mod clipboard;
 pub(crate) mod copyable;
 mod live_chart;
 pub mod render;
