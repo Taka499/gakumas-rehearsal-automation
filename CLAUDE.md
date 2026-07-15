@@ -115,7 +115,7 @@ Key technical details:
 - `HOTKEY_CLICK_TEST` (2): Ctrl+Shift+F9 - PostMessage click test
 - `HOTKEY_SENDINPUT_TEST` (3): Ctrl+Shift+F10 - SendInput click test
 - Output: `screenshots/gakumas_YYYYMMDD_HHMMSS.png`
-- Log: `logs/gakumas_screenshot.log`
+- Log: `logs/gakumas_screenshot.log` — central log for app-level/idle events only; while a session log is active, `log()` writes there exclusively (no duplication into the central log). Rotated at launch when >5 MB, keeping one `.log.1` generation
 - Reference images: `resources/template/rehearsal/*.png`
 
 ## Windows API Notes
