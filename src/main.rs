@@ -66,41 +66,57 @@ const MENU_EXIT: usize = 1003;
 /// Path to the current session log file (set during automation runs).
 static SESSION_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// Sets or clears the session log path. When set, `log()` writes to both
-/// the global log file and the session log file.
+/// Central log file name under `logs/`.
+const CENTRAL_LOG_NAME: &str = "gakumas_screenshot.log";
+
+/// Size cap that triggers launch-time rotation of the central log.
+const CENTRAL_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Rotates `log_path` to `<log_path>.1` (replacing any previous generation)
+/// when it exceeds `max_bytes`. Called once at launch before the first `log()`
+/// write, so the central log is bounded to two generations of at most
+/// ~`max_bytes` each and never races an in-flight writer.
+fn rotate_central_log(log_path: &std::path::Path, max_bytes: u64) {
+    let Ok(meta) = std::fs::metadata(log_path) else {
+        return;
+    };
+    if meta.len() <= max_bytes {
+        return;
+    }
+    let old = log_path.with_extension("log.1");
+    // Windows rename fails if the destination exists.
+    let _ = std::fs::remove_file(&old);
+    let _ = std::fs::rename(log_path, &old);
+}
+
+/// Sets or clears the session log path. When set, `log()` writes to the
+/// session log file instead of the central log file.
 pub fn set_session_log(path: Option<PathBuf>) {
     if let Ok(mut p) = SESSION_LOG_PATH.lock() {
         *p = path;
     }
 }
 
-/// Logs a message to console, global log file, and optionally the session log file.
+/// Logs a message to console and to the session log when one is active,
+/// otherwise to the central log. Session lines are never duplicated into the
+/// central log — the session folder owns that history, and duplication is
+/// what made the central log grow unbounded.
 pub fn log(msg: &str) {
-    let timestamp = Local::now().format("%H:%M:%S%.3f");
+    let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     let line = format!("[{}] {}\n", timestamp, msg);
     print!("{}", line);
 
-    // Write to global log
-    let log_path = paths::get_logs_dir().join("gakumas_screenshot.log");
+    let session_path = SESSION_LOG_PATH.lock().ok().and_then(|guard| guard.clone());
+    let log_path = match session_path {
+        Some(path) => path,
+        None => paths::get_logs_dir().join(CENTRAL_LOG_NAME),
+    };
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)
     {
         let _ = file.write_all(line.as_bytes());
-    }
-
-    // Write to session log if active
-    if let Ok(guard) = SESSION_LOG_PATH.lock() {
-        if let Some(ref session_path) = *guard {
-            if let Ok(mut file) = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(session_path)
-            {
-                let _ = file.write_all(line.as_bytes());
-            }
-        }
     }
 }
 
@@ -125,7 +141,7 @@ fn main() -> Result<()> {
         let log_msg = format!("[PANIC]{} {}\n", location, msg);
         eprintln!("{}", log_msg);
         if let Ok(exe_dir) = std::env::current_exe().map(|p| p.parent().unwrap().to_path_buf()) {
-            let log_path = exe_dir.join("logs").join("gakumas_screenshot.log");
+            let log_path = exe_dir.join("logs").join(CENTRAL_LOG_NAME);
             if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -145,6 +161,11 @@ fn main() -> Result<()> {
 
     // Ensure output directories exist
     paths::ensure_directories()?;
+
+    rotate_central_log(
+        &paths::get_logs_dir().join(CENTRAL_LOG_NAME),
+        CENTRAL_LOG_MAX_BYTES,
+    );
 
     // Remove leftovers from a previous self-update (<exe>.old, resources.old).
     update::install::cleanup_old_files();
@@ -736,5 +757,39 @@ fn generate_charts() {
         Err(e) => {
             log(&format!("Failed to generate charts: {}", e));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rotate_central_log;
+
+    #[test]
+    fn rotate_leaves_small_or_missing_log_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("gakumas_screenshot.log");
+
+        rotate_central_log(&log, 100);
+        assert!(!log.exists());
+        assert!(!log.with_extension("log.1").exists());
+
+        std::fs::write(&log, "small").unwrap();
+        rotate_central_log(&log, 100);
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "small");
+        assert!(!log.with_extension("log.1").exists());
+    }
+
+    #[test]
+    fn rotate_moves_oversized_log_and_replaces_previous_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("gakumas_screenshot.log");
+        let old = log.with_extension("log.1");
+
+        std::fs::write(&log, "x".repeat(101)).unwrap();
+        std::fs::write(&old, "previous generation").unwrap();
+        rotate_central_log(&log, 100);
+
+        assert!(!log.exists());
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), "x".repeat(101));
     }
 }
