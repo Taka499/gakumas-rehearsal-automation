@@ -12,6 +12,17 @@ Format (per docs/EXECPLAN_CHANGELOG_AND_JP_NOTES.md):
 
 # 更新履歴 / Changelog
 
+## v0.10.1 — 2026-07-16
+
+ホットキー撮影のクリップボードコピーと、ログファイルの自動整理を追加
+
+- Ctrl+Shift+S で撮影したスクリーンショットが、ファイル保存に加えてクリップボードにもコピーされるようになりました（そのままチャットツールなどに貼り付けられます）
+- ログファイル（logs フォルダ）が無制限に増え続けないようになりました（起動時に大きくなりすぎたログを自動で整理します）
+
+### English
+- Hotkey screenshot (Ctrl+Shift+S) now also copies the image to the clipboard; the saved file is unchanged.
+- Central log lifecycle: rotated at launch when >5 MB (one `.log.1` generation kept); while a session is active, `log()` writes only to `session.log` (no more duplication into the central log — the unbounded-growth cause); log timestamps now include the date.
+
 ## v0.10.0 — 2026-07-13
 
 アプリ内からのフィードバック送信と、更新履歴の表示機能を追加
